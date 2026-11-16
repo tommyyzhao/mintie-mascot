@@ -1,0 +1,22 @@
+{
+  "name": "mintie-mascot",
+  "version": "0.1.0",
+  "description": "Mintie: a talking slime-blob companion (Three.js + realtime voice)",
+  "scripts": {
+    "start": "node server/server.mjs --port 8142",
+    "test": "node --test test/*.test.mjs",
+    "check": "node tools/check.mjs --quick"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  }
+}

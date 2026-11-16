@@ -1,0 +1,26 @@
+# Static web/ + three as Workers assets; /api/* runs server/worker.mjs (createApp via node:http).
+# No routes or custom domains on purpose: deploys go to workers.dev only. Set ORIGINS to your deployed origin.
+name = "mintie-mascot"
+main = "server/worker.mjs"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "node tools/cf-build.mjs"
+
+[assets]
+directory = ".cf/assets"
+run_worker_first = ["/api/*"]
+
+[vars]
+ORIGINS = "https://mintie-mascot.example.workers.dev"
+
+[[durable_objects.bindings]]
+name = "BUDGET"
+class_name = "Budget"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Budget"]
+
+[observability]
+enabled = true

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e2dfda">
+  <meta name="description" content="Mintie, a slime blob. Touch them, talk to them, stay a while.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <title>Mintie — a slime blob</title>
+  <script type="module" src="/main.js"></script>
+</head>
+<body>
+  <dialog id="name-dialog" aria-labelledby="name-label" class="glass">
+    <form id="name-form">
+      <label id="name-label" for="name-input">What is your name?</label>
+      <input id="name-input" name="name" autocomplete="given-name" maxlength="40" required>
+      <button type="submit">Continue</button>
+    </form>
+  </dialog>
+  <a class="skip" href="#controls">Skip to controls</a>
+  <main class="specimen">
+    <h1 class="sr-only">Mintie, a slime blob</h1>
+    <section class="stage" id="stage" aria-label="Mintie’s little world">
+      <canvas id="character" tabindex="0" role="group" aria-label="Mintie, a slime blob. Touch them or talk to them." aria-describedby="touch-help" aria-keyshortcuts="Space P F L"></canvas>
+      <p id="touch-help" class="sr-only">With Mintie focused: Space to touch, P to pat, F to pet the sunflower. Hold L to lift them and release to let them down.</p>
+    </section>
+    <div id="caption" class="captions" aria-live="polite" aria-atomic="true">
+      <p id="said" class="said" aria-hidden="true" hidden></p>
+      <p id="heard" class="heard" aria-hidden="true" hidden></p>
+      <span id="caption-announcement" class="sr-only"></span>
+    </div>
+    <nav id="controls" class="dock glass" aria-label="Time with Mintie" tabindex="-1" data-state="idle" data-available="false">
+      <button id="talk" class="voice-toggle" type="button" disabled aria-pressed="false" aria-describedby="status voice-state" aria-label="Talk to Mintie. Turn on microphone">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11v1a6 6 0 0 0 12 0v-1M12 18v3m-3 0h6"/></svg>
+        <span>Talk</span>
+      </button>
+      <button id="end" class="voice-toggle" type="button" disabled hidden aria-pressed="true" aria-describedby="status voice-state" aria-label="End conversation. Turn off microphone">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>
+        <span>End</span>
+      </button>
+      <span class="dock-divider" aria-hidden="true"></span>
+      <button id="emotions" class="emotions-toggle" type="button" popovertarget="emotion-picker" aria-label="Choose an emotion" aria-expanded="false" aria-controls="emotion-picker">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14a4.5 4.5 0 0 0 8 0M8.5 9h.01M15.5 9h.01"/></svg>
+      </button>
+      <span id="voice-state" class="sr-only" data-state="idle">Idle</span>
+      <p id="status" class="status sr-only" role="status" tabindex="-1">Checking the local connection…</p>
+    </nav>
+    <section id="emotion-picker" class="emotion-picker glass" popover aria-label="Emotions">
+      <div id="palette" class="palette"></div>
+      <button id="edit-name" type="button" class="name-link" title="Not you? Change name" aria-label="Not you? Change name">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+      </button>
+    </section>
+  </main>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+</body>
+</html>

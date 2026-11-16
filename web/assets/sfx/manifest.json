@@ -1,0 +1,27 @@
+{
+  "squish": [
+    "squish-1.mp3",
+    "squish-2.mp3",
+    "squish-3.mp3"
+  ],
+  "boing": [
+    "boing-1.mp3",
+    "boing-2.mp3",
+    "boing-3.mp3"
+  ],
+  "plop": [
+    "plop-1.mp3",
+    "plop-2.mp3",
+    "plop-3.mp3"
+  ],
+  "stretch": [
+    "stretch-1.mp3",
+    "stretch-2.mp3",
+    "stretch-3.mp3"
+  ],
+  "sparkle": [
+    "sparkle-1.mp3",
+    "sparkle-2.mp3",
+    "sparkle-3.mp3"
+  ]
+}

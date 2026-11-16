@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mintie · Playtest</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 18px system-ui, sans-serif; color: #34432b; background: #f5f2e8; text-align: center; }
+    main { max-width: 700px; margin: auto; padding: 1rem; }
+    h1 { font: italic 3rem Georgia, serif; margin: .5rem 0; }
+    small { display: block; color: #657354; }
+    canvas { display: block; width: 100%; height: min(48vh, 400px); }
+    button, textarea { font: inherit; border: 1px solid #aebc91; border-radius: .7rem; padding: .7rem 1rem; background: #fffdf7; }
+    button { cursor: pointer; min-height: 48px; }
+    button:hover { background: #e3efaf; }
+    :focus-visible { outline: 3px solid #385c28; outline-offset: 3px; }
+    #choices { display: flex; justify-content: center; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
+    #choices button { min-width: 70px; font-size: 2rem; }
+    textarea { width: 100%; max-width: 400px; display: block; margin: .7rem auto; }
+    fieldset { border: 0; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body><main>
+  <h1>Mintie</h1>
+  <section id="intro"><p>Adivina qué emoji representa Mintie en 20 actuaciones.</p><small>Guess the emoji in 20 silent performances.</small><p>Semilla / Seed: <span id="seed"></span></p><button id="start">Empezar / Start</button></section>
+  <section id="trial" hidden><p id="progress"></p><canvas id="character" aria-label="Actuación de Mintie"></canvas><p>¿Qué emoji representa? <small>Which emoji is it?</small></p><div id="choices"></div><button id="replay">Otra vez / Replay</button></section>
+  <section id="end" hidden><h2>¡Gracias! / Thank you!</h2><p id="score"></p><fieldset><legend>¿Jugarías otra vez? / Would you play again? (1–5)</legend><label><input type="radio" name="rating" value="1"> 1</label> <label><input type="radio" name="rating" value="2"> 2</label> <label><input type="radio" name="rating" value="3"> 3</label> <label><input type="radio" name="rating" value="4"> 4</label> <label><input type="radio" name="rating" value="5"> 5</label></fieldset><label for="note">Comentario opcional / Optional note</label><textarea id="note" rows="3"></textarea><button id="download">Descargar resultados / Download results</button></section>
+</main><script type="module" src="/playtest.js"></script></body></html>
