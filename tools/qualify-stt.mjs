@@ -1,5 +1,8 @@
 // One paid end-to-end qualification of Scribe v3 Live through the real server route and the real client URL/chunk code.
-// Usage: node tools/qualify-stt.mjs --env-file PATH --base http://127.0.0.1:8143 --ledger PATH --server-log PATH [--out PATH]
+// Usage: node tools/qualify-stt.mjs --env-file PATH --base http://127.0.0.1:8143 --ledger PATH --server-log PATH --out DIR
+// Results must persist on disk: experiment results are kept for publication, never only printed.
+// --out DIR is required: trials.ndjson (one line per utterance, appended as it completes, with every provider event) and result.json land there.
+// A small smoke check (n=1 per language), not a benchmark; docs/ARCHITECTURE.md reports the measured numbers.
 // Never a microphone: ElevenLabs TTS makes three synthetic utterances, streamed as paced PCM over the real Scribe socket. No retries.
 //
 // PRE-REGISTERED GATES (fixed before the first paid call):
@@ -8,13 +11,15 @@
 //   G3 latency    commit arrives <= 1.5 s (median) and <= 3.0 s (max) after the last speech sample was sent
 //   G4 partials   >= 1 partial_transcript precedes each commit
 //   G5 spend      whole lane <= $2.00, every paid call logged to the ledger
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { loadKeys } from '../server/server.mjs';
 import { scribeUrl, scribeChunk, normalizeText } from '../web/voice.js';
 
 const arg = name => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
 const [envFile, base, ledger, serverLog, out] = ['--env-file', '--base', '--ledger', '--server-log', '--out'].map(arg);
-if (!envFile || !base || !ledger || !serverLog) throw Error('Usage: qualify-stt.mjs --env-file PATH --base URL --ledger PATH --server-log PATH [--out PATH]');
+if (!envFile || !base || !ledger || !serverLog || !out) throw Error('Usage: qualify-stt.mjs --env-file PATH --base URL --ledger PATH --server-log PATH --out DIR (required: results must persist)');
+await mkdir(out, { recursive: true });
 const { ELEVENLABS_API_KEY: key } = await loadKeys(envFile, ['ELEVENLABS_API_KEY']);
 const VOICE = 'ocZQ262SsZb9RIxcQBOj', TTS_MODEL = 'eleven_v4_turbo', PRICE = { sttPerHour: 0.22, ttsPer1kChars: 0.30 /* estimate: plan-dependent */ };
 const UTTERANCES = [
@@ -58,7 +63,9 @@ for (const u of UTTERANCES) {
   const pcm = await synth(u.text);
   const r = await transcribe(pcm);
   const hyp = r.committed?.text ?? '';
-  rows.push({ lang: u.lang, ref: u.text, hyp, wer: Number(wer(u.text, hyp).toFixed(3)), latencyMs: r.latencyMs, partials: r.partials, commits: r.events.filter(e => e.type === 'committed_transcript').length, eventTypes: r.others, audioSeconds: r.audioSeconds });
+  const row = { lang: u.lang, ref: u.text, hyp, wer: Number(wer(u.text, hyp).toFixed(3)), latencyMs: r.latencyMs, partials: r.partials, commits: r.events.filter(e => e.type === 'committed_transcript').length, eventTypes: r.others, audioSeconds: r.audioSeconds };
+  rows.push(row);
+  await appendFile(join(out, 'trials.ndjson'), JSON.stringify({ ...row, events: r.events }) + '\n');
 }
 // One real /api/react text turn (System One + LLM + debug + memory), costed from the server's own usage log.
 const turn = await fetch(`${base}/api/react`, { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hi! My name is Sam. Why is the sky blue?', debug: true, memory: { name: null, facts: [] } }) });
@@ -75,5 +82,5 @@ const gates = {
 };
 const result = { rows, medianLatencyMs: median, totalUsd: Number(total.toFixed(5)), gates, react: { frameKinds: frames.map(f => Object.keys(f)[0]), debugDecider: frames.find(f => f.debug)?.debug.decider, memory: frames.find(f => f.memory)?.memory, line: frames.find(f => f.line)?.line } };
 console.log(JSON.stringify(result, null, 2));
-if (out) await writeFile(out, JSON.stringify(result, null, 2) + '\n');
+await writeFile(join(out, 'result.json'), JSON.stringify(result, null, 2) + '\n');
 process.exitCode = Object.values(gates).every(Boolean) ? 0 : 1;

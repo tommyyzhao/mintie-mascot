@@ -37,7 +37,7 @@ Voice does not work without keys. The browser app only calls `/api/react` when `
 
 Add `?debug` to the URL for an overlay that shows which decider answered, its per-option probabilities, a turn timeline and what Mintie remembers.
 
-![Debug overlay](docs/images/app-debug.png)
+![Debug overlay after a real touch turn: System One (Jev) answered five questions in 322 ms](docs/images/app-debug.png)
 
 ## Adding keys
 

@@ -405,13 +405,30 @@ The Node server has a smaller public mode (`--public <origin>`): per-UTC-day req
 
 ## Latency
 
-Only numbers present in the code, its comments or its tests are quoted here.
+Numbers here come from the code, its comments and tests, or from the benchmark below.
 
 - **Limits.** System One has an 800 ms limit per call, set as "selection p95 575 ms plus 225 ms margin" ([server/jev.mjs](../server/jev.mjs)). `/api/react` has a 4 s overall limit and `/api/say` 12 s. The LLM first-token hedge fires at 900 ms by default.
 - **Recorded measurements in source comments.** A hedge was judged unnecessary for System One because its p95 was measured near 210 ms. Pre-connecting to the model hosts when Talk is pressed (the `HEAD` requests behind `/api/stt-token`) was recorded as taking a first System One call from 237-304 ms to 126-160 ms, and the median of a warm key-free request from 176 ms cold to 67 ms. These come from the authors' own runs and are not a published benchmark.
 - **Targets for speech-to-text.** [tools/qualify-stt.mjs](../tools/qualify-stt.mjs) defines acceptance gates for Scribe v3 Live (a committed transcript 1.5 s at the median and 3.0 s at the max after the last speech sample, word error rate at most 0.15 per utterance). These are pass or fail thresholds, not results.
 - **Per-turn timings.** The `?debug` overlay shows a timeline per turn (commit, react reply, head, line, first audio), `server-timing` carries the decision time, and `?trace=1` records a finer client trace ([web/trace.js](../web/trace.js)).
 
-<!-- TODO: Scribe v3 Live benchmark numbers from evidence/stt-scribe-v3-20261115 -->
+### Measured: speech end to first audio (2026-11-16)
+
+This benchmark was pre-registered and run on an Apple M1 Max against the live providers.
+- **Audio:** synthetic stock-voice clips streamed at 1× real time, never a microphone.
+- **Path:** server level, through the real `/api/stt-token`, `/api/react` and `/api/say`. No browser and no acoustic playback.
+- **Sample:** 36 English, Spanish, mixed and Russian clips, 1 run each. Times are from the audio's speech end.
+
+| Stage | p50 | p95 |
+|---|---|---|
+| STT commit (Scribe v3 Live, `turn_prediction`) | 1282 ms | 1391 ms |
+| First reaction frame | 1410 ms | 1523 ms |
+| First sentence ready (26 turns) | 1698 ms | 1875 ms |
+| Full line ready | 1764 ms | 1930 ms |
+| First TTS audio byte (32 spoken turns) | 1958 ms | 2169 ms |
+
+- **System One:** it decided all 36 turns and chose silence for 4.
+- **Where the time goes:** speech-to-text endpointing is the largest stage. Across 108 clean turns, `turn_prediction` committed at a p50 of 1266 ms and never cut a speaker off. Silence-based VAD at 0.5 s committed about 0.49 s sooner but split 3 of 108 turns. The difference comes from the 1 s `vad_silence_threshold_secs` that [web/voice.js](../web/voice.js) sends. Lowering it trades latency for early cut-offs; at 0.192 s, 4 of 36 hesitant utterances split.
+- **Cost:** a turn cost a median of $0.0017 in provider fees. This is estimated from published prices, except the LLM, which reports its own cost.
 
 ![Emote strip](images/emote-strip.png)
