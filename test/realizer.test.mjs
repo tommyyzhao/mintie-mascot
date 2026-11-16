@@ -189,7 +189,7 @@ test('listener pauses are bounded, stale replies cancelled, no own-speech calls'
   const f=client();let requests=0,release;
   f.context.audio.speaking=()=>false;
   f.context.fetch=async()=>{requests++;return new Promise(r=>release=r);};
-  vm.runInContext("reactAvailable=true;run=null;speechActive=true;partialText='one two three';listenReaction(4000);listenReaction(5000)",f.context);
+  vm.runInContext("reactAvailable=true;listenAvailable=true;run=null;speechActive=true;partialText='one two three';listenReaction(4000);listenReaction(5000)",f.context);
   assert.equal(requests,1);
   vm.runInContext("partialText='one two three four'",f.context);release(Response.json({emoji:'👋'}));await flush();assert.equal(f.plays.length,0);
   f.context.audio.speaking=()=>true;
@@ -197,4 +197,10 @@ test('listener pauses are bounded, stale replies cancelled, no own-speech calls'
 });
 test('STROKE_MS table matches the sampler for every catalog emoji',()=>{
   for(const emoji of Object.keys(CATALOG))assert.equal(STROKE_MS[emoji],sampleStroke(emoji),emoji);
+});
+test('listener probes are skipped when /api/health says listen:false',async()=>{
+  const f=client();let requests=0;
+  f.context.audio.speaking=()=>false;f.context.fetch=async()=>{requests++;return Response.json({emoji:null});};
+  vm.runInContext("reactAvailable=true;listenAvailable=false;run=null;speechActive=true;partialText='one two three';listenReaction(4000)",f.context);
+  assert.equal(requests,0);
 });

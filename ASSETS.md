@@ -9,7 +9,7 @@
 
 All of them were generated with ElevenLabs by the project's authors. [tools/render-fillers.mjs](tools/render-fillers.mjs) and [tools/render-sfx.mjs](tools/render-sfx.mjs) show how; they need your own ElevenLabs key and are not run by tests.
 
-The maintainers believe these AI-generated recordings are not subject to copyright; verify for your jurisdiction. This is the maintainers' position, not legal advice, and the recordings are excluded from the MIT grant in [LICENSE](LICENSE). Check ElevenLabs' terms for your own use. A voice ID in the configuration does not grant rights to a voice; the default `ELEVENLABS_VOICE_ID` is simply a voice available to the maintainers' account, so set your own.
+The maintainers believe these AI-generated recordings are not subject to copyright; verify for your jurisdiction. This is the maintainers' position, not legal advice, and the recordings, like third-party materials, are outside the scope of the MIT license in [LICENSE](LICENSE), which covers the project's source code. Check ElevenLabs' terms for your own use. A voice ID in the configuration does not grant rights to a voice; the default `ELEVENLABS_VOICE_ID` is simply a voice available to the maintainers' account, so set your own.
 
 If you want a different guarantee, regenerate the clips with your own key and replace the files.
 

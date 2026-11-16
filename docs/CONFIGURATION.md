@@ -81,7 +81,7 @@ This differs by run mode and is a common source of "my key is ignored".
 | `--public ORIGINS` | The process environment only (host secrets, or Node's `node --env-file=.env` loader) | The process environment |
 | Cloudflare Worker | Worker secrets | Worker vars and secrets |
 
-The env-file parser reads only the four key names and the seven settings above. It accepts simple `NAME=value` lines, trims the value and strips one pair of matching outer quotes. There is no `export`, no interpolation, no escapes, no multi-line values and no inline comments. Other lines are ignored. Never commit a `.env` file; it is git-ignored.
+The env-file parser reads only the four key names and the eight settings above. It accepts simple `NAME=value` lines, trims the value and strips one pair of matching outer quotes. There is no `export`, no interpolation, no escapes and no multi-line values. A trailing ` # comment` (whitespace then `#`) is stripped from unquoted values and after a closing quote. Other lines are ignored. Never commit a `.env` file; it is git-ignored.
 
 Public mode with a file loaded by Node:
 
@@ -91,7 +91,7 @@ node --env-file=.env server/server.mjs --port 8080 --public https://your-origin.
 
 ## What each key turns on
 
-`GET /api/health` reports what is available: `{ok, stt, react, say, decider}`.
+`GET /api/health` reports what is available: `{ok, stt, react, say, listen, decider}`. `listen` is true when System One is on (a key, or a non-default `SYSTEM_ONE_URL`); it gates the browser's listening-gesture calls.
 
 | Configured | `stt` | `say` | `react` | `decider` |
 | --- | --- | --- | --- | --- |

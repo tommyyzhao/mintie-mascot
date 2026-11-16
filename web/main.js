@@ -33,8 +33,8 @@ const metrics = { selectorMs: null, replyMotionMs: null, commitMotionMs: null, m
 const performer = createPerformer({ now: () => t });
 const trace = createTrace({ audio, performer, touch, pick: (x,y) => character?.pick(x,y) });
 const traced = (type, fn) => data => { if (trace.enabled) trace.textEvent(type, data); return fn(data); };
-// Guard errors (contract 11): the provider-side limits pause voice, never touch or emotes.
-const GUARD = { daily_limit: 'Mintie’s voice is resting until tomorrow — you can still play.', ip_limit: 'Mintie needs a little breather — try again in a minute. You can still play.', human_check: 'Mintie could not confirm you are a person. Reload to try again — you can still play.' };
+// Guard errors: the provider-side limits pause voice, never touch or emotes.
+const GUARD = { daily_limit: 'Mintie’s voice is resting until tomorrow — you can still play.', ip_limit: 'Mintie needs a little breather — try again in a minute. You can still play.', rate_limited: 'Mintie is catching their breath — slow down a little and try again. You can still play.', human_check: 'Mintie could not confirm you are a person. Reload to try again — you can still play.' };
 const FAILURE = /^(Their (response|voice)|Could not (connect|start)|Audio could not|That was too)/;
 let resting = null, restingTimer;
 const status = value => {
@@ -366,7 +366,7 @@ async function onCommit({ text, at, speechEndAt: localEndAt = null, committedAt 
 }
 let partialText = '', partialAt = null;
 let localTurn = false, acknowledgement = null;
-let reactAvailable = false, speechActive = false, pendingTouch = null, flinchUntil = 0;
+let reactAvailable = false, listenAvailable = false, speechActive = false, pendingTouch = null, flinchUntil = 0;
 let thinkingUntil = 0, pauseAt = -Infinity, lastBackchannelAt = -Infinity;
 let speechAt=null, received=null, tracedSuppressedBeats=0;
 let listenerRequest=null, lastListenerAt=-Infinity, listenerWords=0;
@@ -427,7 +427,7 @@ function pumpTouch(now) {
 }
 async function listenReaction(now) {
   const count=partialText.split(/\s+/).filter(Boolean).length;
-  if(!reactAvailable || !speechActive || audio.speaking() || run?.pendingAudio || count-listenerWords<3 || now-lastListenerAt<3000)return;
+  if(!reactAvailable || !listenAvailable || !speechActive || audio.speaking() || run?.pendingAudio || count-listenerWords<3 || now-lastListenerAt<3000)return;
   lastListenerAt=now;listenerWords=count;
   listenerRequest?.abort();
   const controller=listenerRequest=new AbortController(), current=partialText;
@@ -728,7 +728,7 @@ document.addEventListener('keydown', event => {
 const cameraPointers = new Map(); let pinching = false, pinch = 0, lastTouchTarget = null;
 window.addEventListener('pagehide', () => { cameraPointers.clear(); pinching = false; pinch = 0; });
 const pinchDistance = () => { const [a,b] = [...cameraPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
-// Normalized viewport coordinates: (0,0) centre, x right, y up, each in [-1,1] (contract 2).
+// Normalized viewport coordinates: (0,0) centre, x right, y up, each in [-1,1].
 const aim = event => character?.setPointer?.(Math.max(-1, Math.min(1, event.clientX / innerWidth * 2 - 1)), Math.max(-1, Math.min(1, 1 - event.clientY / innerHeight * 2)));
 const unaim = () => character?.setPointer?.(null);
 window.addEventListener('pointermove', aim, { passive: true });
@@ -848,7 +848,7 @@ async function health() {
   try {
     const response = await fetch('/api/health'); if (!response.ok) throw new Error();
     const health = await response.json();
-    reactAvailable = health.react === true; debugPanel?.setHealth(health);
+    reactAvailable = health.react === true; listenAvailable = health.listen === true; debugPanel?.setHealth(health);
     voiceAvailable = health.ok === true && health.stt === true && health.react === true && health.say === true;
     if (!voiceWanted) status(voiceAvailable ? 'Tap Talk to chat.' : 'Voice is unavailable. Try their emotions.');
   } catch { if (!voiceWanted) status('Could not reach the server. Try their emotions.'); }

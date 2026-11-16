@@ -67,7 +67,7 @@ Null for backchannels not addressed to them, noise, fragments, floor-holding, sp
     },
   },
 };
-// C9 observations only, never reaction labels. Thresholds/units documented in CONTRACTS C9.
+// Observations only, never reaction labels. Units: speeds in H/s, distances in H (body heights), times in ms, g in multiples of gravity.
 export function perceivedTouch(t, scene) {
   const part={crown:'crown',forehead:'forehead',eyeL:'left eye',eyeR:'right eye',cheekL:'left cheek',cheekR:'right cheek',mouth:'mouth',belly:'belly',sideL:'left side',sideR:'right side',back:'back',base:'base'}[t.part];
   const where=part?` on their ${part}`:'',n=t.repeat;
@@ -113,7 +113,7 @@ export function systemOneRequest(state) {
 }
 // Selection p95 575ms + 225ms margin; no retries. The parent deadline/disconnect always wins.
 export const SYSTEM_ONE_TIMEOUT_MS = 800;
-// url/model/key come from config (contract 8); a custom URL (e.g. local OpenJev) needs no key. onData sees the raw answers for the debug frame.
+// url/model/key come from config; a custom URL (e.g. local OpenJev) needs no key. onData sees the raw answers for the debug frame.
 async function askSystemOne(request, parse, {key, url = JEV_URL, model, fetch = globalThis.fetch, signal, timeoutMs = SYSTEM_ONE_TIMEOUT_MS, log = () => {}, onData}) {
   const controller = new AbortController();
   let timer;

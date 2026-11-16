@@ -65,7 +65,7 @@ test('health decider: system-one with a key, llm with only OpenRouter, rules wit
   assert.equal((await harness(route, { keys:{ TYPESAFE_API_KEY:'legacy' } }).health()).decider, 'system-one', 'TYPESAFE_API_KEY fallback');
   assert.equal((await harness(route, { keys:{ OPENROUTER_API_KEY:'k' } }).health()).decider, 'llm');
   const none = await harness(route, {}).health();
-  assert.deepEqual(none, { ok:true, stt:false, react:false, say:false, decider:'rules' });
+  assert.deepEqual(none, { ok:true, stt:false, react:false, say:false, listen:false, decider:'rules' });
   assert.equal((await harness(route, { config:{ systemOneUrl:'http://127.0.0.1:3000/v1/systemone' } }).health()).decider, 'system-one');
 });
 
@@ -208,4 +208,15 @@ test('SYSTEM_ONE_TIMEOUT_MS: env overrides the 800 ms default, bounded at the tr
   assert.equal(configFrom({}).systemOneTimeoutMs, 800);
   assert.equal(configFrom({SYSTEM_ONE_TIMEOUT_MS:'4000'}).systemOneTimeoutMs, 4000);
   for (const bad of ['50','99999','abc','1.5']) assert.throws(() => createApp({webRoot:'.',threeDir:'.',catalog:{},config:configFrom({SYSTEM_ONE_TIMEOUT_MS:bad})}), /invalid_config/);
+});
+test('memory M4b: names skip stop words, keep combining marks and both apostrophes; filler is not a fact', () => {
+  for (const t of ['call me maybe', 'call me when you are ready', 'Call me later']) assert.equal(learn(null, t).name, null, t);
+  assert.equal(learn(null, 'my name is अनिल').name, 'अनिल');
+  assert.equal(learn(null, "my name is D'Arcy").name, "D'Arcy");
+  assert.equal(learn(null, 'my name is D’Arcy').name, 'D’Arcy');
+  assert.ok(validMemory({ name:'D’Arcy', facts:[] }) && validMemory({ name:"D'Arcy", facts:[] }) && validMemory({ name:'अनिल', facts:[] }));
+  for (const t of ['ho ho ho', 'ho ho ho merry christmas', 'I have a question about snails', 'I have to go now']) assert.deepEqual(learn(null, t).facts, [], t);
+  assert.deepEqual(learn(null, 'I have a dog named Rex').facts, ['I have a dog named Rex']);
+  assert.deepEqual(learn(null, 'ho fame').facts, ['ho fame']);
+  assert.deepEqual(learn(null, 'me llamo Ana').name, 'Ana');
 });

@@ -45,7 +45,7 @@ test('new moves keep hop translation in physics and a complete spin in the pose'
     const e=createPerformer();e.play(emoji);assert.equal(e.update(600).mouth.shape,'none',emoji);assert.equal(e.update(601,{speaking:0.5}).mouth.shape,'o',emoji);
   }
 });
-test('all catalog performances: finite C1 pose, complete release, near-idle',()=>{
+test('all catalog performances: finite pose, complete release, near-idle',()=>{
   for (const emoji of Object.keys(CATALOG)) {
     const engine=createPerformer({seed:23}), idle=createPerformer({seed:23});
     const {durationMs,anticipationMs}=engine.play(emoji);

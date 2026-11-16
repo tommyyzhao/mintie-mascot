@@ -21,7 +21,7 @@ export function fuzzyEchoMatch(partial, line) {
   return words.length > 0 && echoPrefixWords(partial, line) === words.length;
 }
 
-// Local energy only earns its keep for the 250 ms backchannel nod (C5).
+// Local energy only earns its keep for the 250 ms backchannel nod.
 // The provider's turn prediction owns admission and end of turn; energy never commits a transcript.
 export function createEnergyVAD({ onPause = () => {}, onOnset = () => {}, onBlocked = () => {}, pauseMs = 250 } = {}) {
   const noise = [];

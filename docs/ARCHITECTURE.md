@@ -207,7 +207,7 @@ SYSTEM_ONE_API_KEY=...                                  # optional for a custom 
 - A non-default URL switches tier 1 on without a key. A key, if present, is sent as `Authorization: Bearer`.
 - `SYSTEM_ONE_MODEL`, if set, replaces the `model` field in every request.
 - `http:` is accepted only for loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). Everything else must be `https:`.
-- Nothing about the 800 ms limit is configurable. A self-hosted model that cannot answer within it will fall through on every turn. Check the decider chip in the `?debug` overlay.
+- The 800 ms limit is the default; raise it with `SYSTEM_ONE_TIMEOUT_MS`. A self-hosted model that cannot answer within it will fall through on every turn. Check the decider chip in the `?debug` overlay.
 
 See [CONFIGURATION.md](CONFIGURATION.md#running-a-local-openjev) for a local OpenJev setup and the option-count caveat that applies to it.
 
@@ -356,16 +356,16 @@ Other responses:
 
 | Route | Response |
 | --- | --- |
-| `/api/react` with `listening: true` | One JSON object `{emoji}` (not a stream) |
+| `/api/react` with `listening: true` | One JSON object `{emoji}` (not a stream). `503 missing_key` without System One; check `listen` in `/api/health` first |
 | `/api/say` with `align: true` | ndjson of `{pcm, chars, startMs}`, then `{done: true}`. `pcm` is base64 PCM16 little-endian at 24 kHz (`x-sample-rate: 24000`). A chunk without alignment is just `{pcm}` |
 | `/api/say` without `align` | Raw `audio/pcm` stream |
 | `/api/stt-token` | `{token, model}`; also warms DNS and TLS to the decision model and LLM hosts |
-| `/api/health` | `{ok, stt, react, say, decider}`; on the hosted Worker also `turnstile` (the public site key) |
+| `/api/health` | `{ok, stt, react, say, listen, decider}` (`listen` is true when System One is configured; the browser sends listening probes only then); on the hosted Worker also `turnstile` (the public site key) |
 | `/api/session` | Hosted only: `{ok: true}` and a session cookie, see [hosted guard](#hosted-guard) |
 
 Errors before the stream starts are JSON `{error: {stage, code}}` with a status: `bad_request` (400, 403 or 404), `missing_key` (503), `rate_limited` and `daily_limit` (429), `http_error` (502), `timeout` (504); the Worker adds `ip_limit` (429) and `human_check` (403). The server also sends a `server-timing: decide;dur=<ms>` header on `/api/react`.
 
-Server-side limits: request bodies up to 32 KB with a 5 s read deadline; per-route token buckets (react 5 per second with a burst of 10, say 2 per second with a burst of 4, stt-token one per three seconds with a burst of 2); route timeouts of 4 s (react), 12 s (say) and 5 s (stt-token).
+Server-side limits: request bodies up to 32 KB with a 5 s read deadline; per-client (IP) per-route token buckets, charged only after the body validates (react 5 per second with a burst of 10, say 2 per second with a burst of 4, stt-token one per three seconds with a burst of 2); route timeouts of 4 s (react), 12 s (say) and 5 s (stt-token).
 
 ## Hosted guard
 

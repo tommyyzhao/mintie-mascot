@@ -11,10 +11,10 @@ import { validMemory, learn } from './memory.mjs';
 import { canonical } from '../web/perform/emoji.js';
 import { soulFor } from './soul.mjs';
 
-export const CSP = "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' wss://api.elevenlabs.io; media-src 'self' blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'";
+export const CSP = "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' wss://api.elevenlabs.io; media-src 'self' blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'";
 export const KEY_NAMES = ['OPENROUTER_API_KEY','ELEVENLABS_API_KEY','SYSTEM_ONE_API_KEY','TYPESAFE_API_KEY'];
 const ELEVEN_BASE = 'https://api.elevenlabs.io';
-// Defaults for every swappable piece (contract 8). Env var -> field; empty strings count as unset.
+// Defaults for every swappable piece. Env var -> field; empty strings count as unset.
 const CONFIG_DEFAULTS = { llmModel:LLM_MODEL, llmBaseUrl:LLM_BASE_URL, systemOneUrl:JEV_URL, systemOneModel:undefined, voiceId:'ocZQ262SsZb9RIxcQBOj', ttsModel:'eleven_v4_turbo', sttModel:'scribe_v3_live', systemOneTimeoutMs:SYSTEM_ONE_TIMEOUT_MS };
 const CONFIG_ENV = { llmModel:'LLM_MODEL', llmBaseUrl:'LLM_BASE_URL', systemOneUrl:'SYSTEM_ONE_URL', systemOneModel:'SYSTEM_ONE_MODEL', voiceId:'ELEVENLABS_VOICE_ID', ttsModel:'ELEVENLABS_TTS_MODEL', sttModel:'ELEVENLABS_STT_MODEL', systemOneTimeoutMs:'SYSTEM_ONE_TIMEOUT_MS' };
 export function configFrom(env = {}) {
@@ -38,7 +38,10 @@ export async function loadKeys(file, names = KEY_NAMES) {
   const keys = {};
   for (const line of text.split(/\r?\n/)) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (match && names.includes(match[1])) keys[match[1]] = match[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (!match || !names.includes(match[1])) continue;
+    // Quoted values may be followed by a ` # comment`; unquoted ones end at whitespace + `#`.
+    const raw = match[2].trim(), quoted = /^(['"])(.*?)\1(?:\s+#.*)?$/.exec(raw);
+    keys[match[1]] = quoted ? quoted[2] : raw.replace(/(^|\s)#.*$/, '').trim();
   }
   return keys;
 }
@@ -53,7 +56,7 @@ export function lineRequest(catalog, body, voice = 'words', model = LLM_MODEL) {
       : ` Write plain text, NOT JSON. Use expressive emojis liberally and naturally in your reply; they appear in captions, never speech. Usually one breath, roughly 12 words; say more when a story, explanation, comfort or request calls for it. Even stories should stay under roughly 80 words. Finish each thought. Answer the question/request or offer specific empathy. Use about ONE fitting audio tag in most replies; tags count as zero words. Only these exact English audio tags are allowed, even in other languages: ${[...tags].map(t=>'['+t+']').join(' ')}. Never output any other bracketed tag, translated tag, stage direction or movement. A body move is happening independently; do not invent or narrate it.`)},
       {role:'user',content:JSON.stringify(sound?{...body,recentSounds:recentSounds(body.history).slice(-6)}:body)},...(body.text?[{role:'user',content:body.text}]:[])]};
 }
-// ponytail: C10 has no voice-mode field; short said entries conservatively count as sounds.
+// ponytail: history entries carry no voice-mode field; short said entries conservatively count as sounds.
 export const recentSounds = history => (history ?? []).filter(x=>x.who==='mintie' && typeof x.said==='string' && x.said.trim() && x.said.replace(/\[[^\]]*\]/g,'').trim().split(/\s+/).length<=4).map(x=>x.said);
 export function soundKey(line) {
   return line.normalize('NFD').replace(/\p{M}/gu,'').toLowerCase()
@@ -333,6 +336,7 @@ const plainAnswers = c => ({animation:{answer:c.emoji,p:null,top:[]},gaze:{answe
 
 // Public deploy (--public): per-UTC-day request ceilings, all visitors together.
 // ponytail: in-memory, single machine; resets on restart. Upgrade: per-IP buckets + persisted counters if abused.
+const MAX_CLIENTS = 5000;
 export const DAILY = { react:2000, say:1500, 'stt-token':300 };
 
 // origins (public mode): exact https origins served behind a TLS proxy; replaces the loopback Host/Origin check.
@@ -348,17 +352,20 @@ export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globa
   if([s2HedgeMs,s2SoundHedgeMs].some(x=>!Number.isFinite(x)||x<0||x>4000))throw Error('invalid_s2_options');
   // http: only for loopback (wrangler dev); public origins must be https.
   if(origins !== undefined && (!Array.isArray(origins) || !origins.length || origins.some(o=>{try{const u=new URL(o);return u.origin!==o||u.protocol!=='https:'&&!(u.protocol==='http:'&&['localhost','127.0.0.1'].includes(u.hostname));}catch{return true;}})))throw Error('invalid_origins');
-  const allowed = origins && new Set(origins), hosts = origins && new Set(origins.map(o=>new URL(o).host)), buckets = new Map();
-  let used = {}, lastListenAt=-Infinity;
+  const allowed = origins && new Set(origins), hosts = origins && new Set(origins.map(o=>new URL(o).host)), buckets = new Map(), lastListen = new Map();
+  let used = {};
   function send(res, status, obj) { if (!res.headersSent && !res.destroyed) { res.writeHead(status, {'content-type':'application/json; charset=utf-8'}); res.end(JSON.stringify(obj)); } }
   function error(res, stage, code, status, upstream) {
     if ((stage === 'react' || stage === 'say' && res.getHeader('content-type')?.startsWith('application/x-ndjson')) && res.headersSent && !res.destroyed) res.end(JSON.stringify({error:{stage,code}}) + '\n');
     else send(res, status, {error:{stage, code, ...(upstream ? {status:upstream} : {})}});
   }
-  function allow(route) {
-    const [rate, cap] = limits[route], time = now(), prev = buckets.get(route) || { tokens:cap, time };
+  // Per-client state, keyed by IP in bounded Maps (oldest entry evicted first). cf-connecting-ip is set by Cloudflare / the TLS proxy; locally it is the socket address.
+  const clientOf = req => String(req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || 'unknown');
+  const remember = (map, key, value) => { map.delete(key); map.set(key, value); if (map.size > MAX_CLIENTS) map.delete(map.keys().next().value); };
+  function allow(client, route) {
+    const [rate, cap] = limits[route], time = now(), key = `${client}|${route}`, prev = buckets.get(key) || { tokens:cap, time };
     const tokens = Math.min(cap, prev.tokens + Math.max(0, time - prev.time) * rate / 1000);
-    buckets.set(route, {tokens: tokens >= 1 ? tokens - 1 : tokens, time}); return tokens >= 1;
+    remember(buckets, key, {tokens: tokens >= 1 ? tokens - 1 : tokens, time}); return tokens >= 1;
   }
   return async (req, res) => {
     res.setHeader('content-security-policy', CSP); res.setHeader('x-content-type-options', 'nosniff');
@@ -374,18 +381,21 @@ export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globa
       const browser = allowed ? allowed.has(origin) && new URL(origin).host === host : origin === `http://${host}`;
       if (!browser) return error(res, 'request', 'bad_request', 403);
     }
-    if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, {ok:true, stt:!!keys.ELEVENLABS_API_KEY, react:llmOn, say:!!keys.ELEVENLABS_API_KEY, decider});
+    if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, {ok:true, stt:!!keys.ELEVENLABS_API_KEY, react:llmOn, say:!!keys.ELEVENLABS_API_KEY, listen:sysOn, decider});
     const route = /^\/api\/(react|say|stt-token)$/.exec(pathname)?.[1];
     if (req.method === 'POST' && route) {
       const sayStart = now(); let sayBytes = 0, sayOk = false, sayUpstream = null;
       if (route === 'say') res.once('close', () => log({stage:'say-end',ok:sayOk && res.writableFinished,status:res.statusCode,upstream:sayUpstream,ms:now()-sayStart,bytes:sayBytes}));
-      if (!allow(route)) return error(res, route, 'rate_limited', 429);
-      if (daily) { const day = Math.floor(now() / 864e5); if (used.day !== day) used = {day}; if ((used[route] ?? 0) >= daily[route]) return error(res, route, 'daily_limit', 429); used[route] = (used[route] ?? 0) + 1; }
       let body; try { body = await jsonBody(req); } catch { return error(res, route, 'bad_request', 400); }
       if (!validRequest(route, body)) return error(res, route, 'bad_request', 400);
+      // Malformed requests never spend the bucket or the daily counter.
+      if (body.listening && !sysOn) return error(res, route, 'missing_key', 503);
+      const client = clientOf(req);
+      if (!allow(client, route)) return error(res, route, 'rate_limited', 429);
+      if (daily) { const day = Math.floor(now() / 864e5); if (used.day !== day) used = {day}; if ((used[route] ?? 0) >= daily[route]) return error(res, route, 'daily_limit', 429); used[route] = (used[route] ?? 0) + 1; }
       if(body.listening) {
-        if(now()-lastListenAt<3000)return error(res,route,'rate_limited',429);
-        lastListenAt=now();
+        if(now()-(lastListen.get(client) ?? -Infinity)<3000)return error(res,route,'rate_limited',429);
+        remember(lastListen, client, now());
       }
       if(route === 'react')body=perceiveState(body);
       // react never needs a key: touch and emotes fall back to rules. Only the paid ElevenLabs routes do.
@@ -404,7 +414,7 @@ export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globa
         return headWrite;
       };
       const onWordsDelta=async delta=>{streamRaw+=delta;await emitHead();};
-      // Memory is learned from the user's own words with plain patterns: no model call, no latency, no injection surface.
+      // Memory is learned from the user's own words with plain patterns: no model call, no latency. It is user-controlled data, validated and placed only in the user message, never in the system prompt.
       const before = route==='react' && validMemory(body.memory) ? body.memory : null, memory = route==='react' ? learn(before, body.text) : null, learned = route==='react' && memory!==before && (memory.name!==null || memory.facts.length>0);
       if(learned)body={...body,memory};
       if(route==='react' && llmOn && !body.listening)for(const voice of body.text?['sound','words']:['sound']) {
@@ -417,7 +427,6 @@ export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globa
       }
       try {
         if(route==='react' && body.listening) {
-          if(!sysOn)return error(res,route,'missing_key',503);
           const result=await listenSystemOne(body,sysOptions({signal:controller.signal}));
           log({stage:'system-one-listen',ms:now()-start,ok:true});
           send(res,200,result);

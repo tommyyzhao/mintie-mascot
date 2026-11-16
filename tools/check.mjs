@@ -117,7 +117,7 @@ try {
       const first = bodies.length === 1;
       route.fulfill({ contentType: 'application/x-ndjson', body: frames([
         ...(first ? ['{"memory":{"name":"Alex","facts":["likes tea"]}}'] : []),
-        '{"debug":{"decider":"system-one","model":"jev-27b","ms":143,"answers":{"emote":{"answer":"👋","p":0.81,"top":[["👋",0.81],["😊",0.12],["🤔",0.04]]},"voice":{"answer":"words","p":0.93,"top":[["words",0.93],["sound",0.05],["none",0.02]]}}}}']) });
+        '{"debug":{"decider":"system-one","model":"jev-1.14.0","ms":143,"answers":{"emote":{"answer":"👋","p":0.81,"top":[["👋",0.81],["😊",0.12],["🤔",0.04]]},"voice":{"answer":"words","p":0.93,"top":[["words",0.93],["sound",0.05],["none",0.02]]}}}}']) });
     });
     await page.addInitScript(() => { if (!sessionStorage.__seeded) { sessionStorage.__seeded = 1; localStorage.setItem('mintie-name', 'Legacy'); } });
     await page.goto(`${base}/?debug`); await page.waitForFunction(() => window.__mintie?.ready);
@@ -131,7 +131,7 @@ try {
     assert.ok(bodies.every(b => b.debug === true && !('name' in b)));
     assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('mintie-memory'))), { name: 'Alex', facts: ['likes tea'] });
     const panel = page.locator('#debug');
-    assert.match(await panel.innerText(), /decider: system-one/); assert.match(await panel.innerText(), /jev-27b/); assert.match(await panel.innerText(), /p=0\.81/); assert.match(await panel.innerText(), /Name: Alex/);
+    assert.match(await panel.innerText(), /decider: system-one/); assert.match(await panel.innerText(), /jev-1\.14\.0/); assert.match(await panel.innerText(), /p=0\.81/); assert.match(await panel.innerText(), /Name: Alex/);
     assert.equal(await panel.locator('.top li').count(), 6); assert.equal(await panel.locator('.timeline li').count(), 5);
     assert.equal(await panel.getAttribute('aria-label'), 'System One debug');
     assert.equal(await panel.locator('.flags .flag').count() >= 3, true);

@@ -22,7 +22,11 @@ const num = v => Number.isFinite(v) && v >= 0;
 const micro = usd => Math.ceil(usd * 1e6 - 1e-9);
 const ttsRate = model => PRICES.ttsPer1k[model] ?? PRICES.ttsPer1k.default;
 
-// Estimated USD for one `log({stage:'usage',…})` event (contract 10); unknown providers cost 0.
+// Estimated USD for one `log({stage:'usage',…})` event; unknown providers cost 0.
+// An openrouter (llm) or system-one (decision) event with no usd, cost or token counts is charged a conservative flat estimate, never $0:
+// a $0 settle would refund the whole reservation. Flat values: one words/sound LLM call ~1.5K in + 0.3K out tokens at the dearest endpoint ~= $0.0005, rounded up;
+// one System One decision ~2K input tokens ~= $0.0001, rounded up.
+export const FLAT = { openrouter: 0.001, 'system-one': 0.0002 };
 export function costOf(e, { ttsModel } = {}) {
   if (e?.stage !== 'usage') return 0;
   const provider = e.provider === 'typesafe' ? 'system-one' : e.provider;
@@ -32,6 +36,8 @@ export function costOf(e, { ttsModel } = {}) {
     if (e.kind === 'tts') return (num(e.characters) ? e.characters : 0) * ttsRate(ttsModel) / 1000;
     if (e.kind === 'stt') return (num(e.seconds) ? e.seconds : (num(e.sessions) ? e.sessions : 1) * SESSION_SECONDS) / 3600 * PRICES.sttPerHour;
   }
+  const counted = [e.input_tokens, e.prompt_tokens, e.output_tokens, e.completion_tokens, e.tokens].some(num);
+  if (!counted && FLAT[provider] !== undefined && (provider === 'openrouter' ? e.kind === 'llm' : e.kind === 'decision')) return FLAT[provider];
   if (provider === 'openrouter') return (input * PRICES.openrouter.inPerM + (output || (num(e.tokens) ? e.tokens : 0)) * PRICES.openrouter.outPerM) / 1e6;
   if (provider === 'system-one') return (input || (num(e.tokens) ? e.tokens : 0)) * PRICES['system-one'].inPerM / 1e6;
   return 0;
@@ -60,10 +66,11 @@ export class Ledger {
     return { ok: true, day, reserved: cost };
   }
   // Replace the reservation with the actual cost, on the day it was admitted; a pruned day is dropped.
-  async settle({ day, ip, reserved, actual }) {
-    const delta = actual - reserved; if (!delta) return;
+  // refundSession: a failed stt-token mint (status >= 400) gives its per-IP session back.
+  async settle({ day, ip, reserved, actual, refundSession }) {
+    const delta = actual - reserved; if (!delta && !refundSession) return;
     const gk = `g:${day}`, ik = `i:${day}:${ip}`, rows = await this.storage.get([gk, ik]), put = {};
-    for (const [k, row] of rows) put[k] = { ...row, usd: Math.max(0, row.usd + delta) };
+    for (const [k, row] of rows) put[k] = { ...row, usd: Math.max(0, row.usd + delta), ...(refundSession && k === ik ? { sessions: Math.max(0, (row.sessions ?? 0) - 1) } : {}) };
     if (Object.keys(put).length) await this.storage.put(put);
   }
   async arm() {
@@ -92,14 +99,26 @@ const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,
 const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
 const hmacKey = (secret, usage) => crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [usage]);
 
+// IPv4 and unknown pass through; IPv6 becomes its /64 (first 4 hextets after expanding `::`). IPv4-mapped (::ffff:a.b.c.d) is treated as IPv4.
+export function ipKey(ip) {
+  if (typeof ip !== 'string' || !ip.includes(':')) return ip;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip); if (mapped) return mapped[1];
+  const [head, tail, extra] = ip.split('::'); if (extra !== undefined) return ip;
+  const a = head ? head.split(':') : [], b = tail ? tail.split(':') : [];
+  if (tail === undefined ? a.length !== 8 : a.length + b.length > 7) return ip;
+  const full = tail === undefined ? a : [...a, ...Array(8 - a.length - b.length).fill('0'), ...b];
+  return full.slice(0, 4).map(h => h.toLowerCase().replace(/^0+(?=.)/, '')).join(':') + '::/64';
+}
+
 // env: ORIGINS, TURNSTILE_SECRET_KEY, TURNSTILE_SITE_KEY, ELEVENLABS_TTS_MODEL (strings). ledger: object with admit/settle (the DO stub, or a Ledger in tests).
 export function createGuard({ env, ledger, fetch = globalThis.fetch, now = Date.now, headers = {} }) {
-  const origins = new Set((env.ORIGINS ?? '').split(',').filter(Boolean)), secret = env.TURNSTILE_SECRET_KEY, siteKey = env.TURNSTILE_SITE_KEY || undefined;
+  const origins = new Set((env.ORIGINS ?? '').split(',').map(o => o.trim()).filter(Boolean)), secret = env.TURNSTILE_SECRET_KEY, siteKey = env.TURNSTILE_SITE_KEY || undefined;
   const ttsModel = env.ELEVENLABS_TTS_MODEL || 'eleven_v4_turbo';
   let denied = { day: -1, seen: new Map() };
   const fail = (status, stage, code) => Response.json({ error: { stage, code } }, { status, headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers } });
   // Never store or log raw IPs: a salted hash keys the ledger and binds the cookie.
-  const ipHash = async ip => hex(await crypto.subtle.digest('SHA-256', enc.encode(`${env.IP_SALT || secret}|ip|${ip}`))).slice(0, 32);
+  // IPv6 clients roam within their /64, so only that prefix is hashed.
+  const ipHash = async ip => hex(await crypto.subtle.digest('SHA-256', enc.encode(`${env.IP_SALT || secret}|ip|${ipKey(ip)}`))).slice(0, 32);
   const sign = async (exp, ih) => b64u(await crypto.subtle.sign('HMAC', await hmacKey(secret, 'sign'), enc.encode(`session-v1|${exp}|${ih}`)));
   async function validCookie(request, ih) {
     const raw = request.headers.get('cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -139,7 +158,7 @@ export function createGuard({ env, ledger, fetch = globalThis.fetch, now = Date.
     const settle = async status => {
       if (s.settled) return; s.settled = true;
       const actual = s.events.length ? micro(s.events.reduce((sum, e) => sum + costOf(e, s), 0)) : status < 400 ? got.reserved : 0; // success with no usage event: keep the reservation
-      await ledger.settle({ day: got.day, ip: ih, reserved: got.reserved, actual });
+      await ledger.settle({ day: got.day, ip: ih, reserved: got.reserved, actual, refundSession: route === 'stt-token' && status >= 400 });
     };
     let res; try { res = await als.run(s, () => next(request)); } catch (e) { ctx.waitUntil(settle(500)); throw e; }
     if (!res.body) { ctx.waitUntil(settle(res.status)); return res; }

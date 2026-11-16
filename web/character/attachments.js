@@ -3,7 +3,7 @@ import { createFace } from './attach/face.js';
 import { createEffects } from './attach/effects.js';
 import { EYE_AIM } from './body.js';
 
-/** C8. All coordinates supplied by the body are world-space, H=1. WebGL2 GLSL face;
+/** All coordinates supplied by the body are world-space, H=1. WebGL2 GLSL face;
  * standard three materials elsewhere. WebGPU is intentionally unsupported (body is WebGL2).
  * Owns its resources only; never disposes scene/renderer or advances touch dynamics. */
 export function createAttachments({THREE:T,scene,renderer}){

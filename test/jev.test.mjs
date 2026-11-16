@@ -46,7 +46,7 @@ test('both Jev passes time out at the configured 800ms boundary, no retries',asy
     try {await assert.rejects(invoke({key:'test',timeoutMs:10,fetch:async(_u,o)=>{calls++;signal=o.signal;return new Promise(()=>{});}}),/timeout/);assert.equal(calls,1);assert.equal(signal.aborted,true);}finally{clearTimeout(keep);}
   }
 });
-test('C9 perception explains hover, drag direction, acceleration, jerk, release and impact g',()=>{
+test('perception explains hover, drag direction, acceleration, jerk, release and impact g',()=>{
   assert.equal(perceivedTouch({kind:'hover',part:'crown',durationMs:1800,speed:.1}),'cursor hovering gently over their crown for 1.8 s');
   const observation=perceivedTouch({kind:'throw',from:[0,0],to:[-2.1,0],jerk:50,accel:10,release:3.4,g:4.2},scene);
   for(const text of ['dragged 2.1 H to your left','sharp jerk','released at 3.4 H/s','hit the floor at 4.2 g','10 H/s²'])assert.ok(observation.includes(text),observation);
@@ -56,7 +56,7 @@ test('C9 perception explains hover, drag direction, acceleration, jerk, release 
   assert.equal(perceivedTouch({kind:'land',part:'back',impact:9}),'landed hard on their back (impact 9 H/s, very hard)');
   const state={history:[{who:'touch',kind:'hover',part:'crown',agoMs:50}]};assert.deepEqual(perceiveState(perceiveState(state)),perceiveState(state));assert.equal(state.history[0].perceived,undefined);
 });
-test('C3 validates new telemetry, name and scene; 40 total/12 conversation bound; no extra fields',()=>{
+test('validates new telemetry, name and scene; 40 total/12 conversation bound; no extra fields',()=>{
   const touch={kind:'land',at:0,intensity:.2,part:'belly',durationMs:10,path:.1,speed:2,height:0,impact:0,spin:-2,repeat:1,accel:1000,jerk:100000,release:50,g:50,from:[-100,100],to:[0,0]};
   assert.equal(validRequest('react',{touch,memory:{name:"María O'Neil-Smith",facts:['likes cats']},scene}),true);
   const history=[...Array(12).fill({who:'user',text:'hi',agoMs:0}),...Array(28).fill({who:'touch',...touch,at:undefined,agoMs:100})].map(({at,...entry})=>entry);

@@ -4,6 +4,8 @@
 name = "mintie-mascot"
 main = "server/worker.mjs"
 compatibility_date = "2026-10-01"
+# The Worker imports cloudflare:node, node:http and node:async_hooks. Docs: from compatibility date 2026-08-04 nodejs_compat is on by default, so this is redundant but harmless (and keeps older dates working).
+compatibility_flags = ["nodejs_compat"]
 
 [build]
 command = "node tools/cf-build.mjs"

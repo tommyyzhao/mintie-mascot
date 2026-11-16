@@ -1,6 +1,7 @@
 // Human check for the hosted demo. Local Node's /api/health has no `turnstile` field: ensureSession is then a no-op.
 // Otherwise one managed/invisible Turnstile challenge is solved and /api/session turns it into a 30-minute HttpOnly cookie.
 const SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const SOLVE_MS = 20000; // a stuck challenge rejects, which clears `pending` so the next call retries
 let pending = null, loaded = null;
 
 function loadScript() {
@@ -18,10 +19,14 @@ async function solve(siteKey) {
   box.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:9'; // only visible if Cloudflare needs an interaction
   document.body.append(box);
   try {
-    return await new Promise((resolve, reject) => window.turnstile.render(box, {
-      sitekey: siteKey, size: 'flexible', appearance: 'interaction-only', execution: 'render',
-      callback: resolve, 'error-callback': () => reject(Error('turnstile_failed')), 'timeout-callback': () => reject(Error('turnstile_timeout')),
-    }));
+    let timer, widget;
+    return await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(Error('turnstile_timeout')), SOLVE_MS);
+      widget = window.turnstile.render(box, {
+        sitekey: siteKey, size: 'flexible', appearance: 'interaction-only', execution: 'render',
+        callback: resolve, 'error-callback': () => reject(Error('turnstile_failed')), 'timeout-callback': () => reject(Error('turnstile_timeout')),
+      });
+    }).finally(() => { clearTimeout(timer); try { window.turnstile.remove(widget); } catch {} });
   } finally { box.remove(); }
 }
 

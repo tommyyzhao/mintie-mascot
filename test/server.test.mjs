@@ -6,7 +6,7 @@ import {mkdtemp,mkdir,writeFile,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {once} from 'node:events';
-import {loadKeys,createApp,generateLine,configureServer,jsonBody,cleanLine,validLine,responseEvents,proseResult,lineRequest,validRequest,repeatedLine,repeatedSound,soundKey,recentSounds,timestampObjects,alignedChunk} from '../server/server.mjs';
+import {loadKeys,KEY_NAMES,createApp,generateLine,configureServer,jsonBody,cleanLine,validLine,responseEvents,proseResult,lineRequest,validRequest,repeatedLine,repeatedSound,soundKey,recentSounds,timestampObjects,alignedChunk} from '../server/server.mjs';
 import {CATALOG} from '../web/perform/emoji.js';
 import {decisionRequest} from '../server/decision.mjs';
 const keys={OPENROUTER_API_KEY:'SENTINEL_OPENROUTER_SECRET',ELEVENLABS_API_KEY:'SENTINEL_ELEVEN_SECRET',TYPESAFE_API_KEY:'SENTINEL_TYPESAFE_SECRET'};
@@ -46,8 +46,8 @@ test('host/origin/JSON/size/static containment and rate limits',async t=>{
   for(const url of ['/../secret','/%2e%2e/secret','/escape','/.hidden'])assert.equal((await request(url,{method:'GET'})).status,404);
   assert.match((await request('/vendor/three/three.module.js',{method:'GET'})).headers['content-type'],/^text\/javascript/);
   const html=await request('/',{method:'GET'});assert.equal(html.headers['cache-control'],'no-store');assert.ok(html.headers['content-security-policy']);
-  assert.deepEqual(JSON.parse((await request('/api/health',{method:'GET'})).body),{ok:true,stt:true,react:true,say:true,decider:'system-one'});
-  for(let i=0;i<8;i++)await request('/api/react');assert.equal((await request('/api/react')).status,429);
+  assert.deepEqual(JSON.parse((await request('/api/health',{method:'GET'})).body),{ok:true,stt:true,react:true,say:true,listen:true,decider:'system-one'});
+  for(let i=0;i<10;i++)await request('/api/react');assert.equal((await request('/api/react')).status,429); // malformed requests above no longer spend the bucket
 });
 test('public mode: exact https origin replaces loopback check; daily ceiling resets at UTC midnight',async t=>{
   assert.throws(()=>createApp({webRoot:'.',threeDir:'.',catalog:CATALOG,origins:['http://mintie.example']}),/invalid_origins/);
@@ -333,4 +333,33 @@ test('listener runs one Jev only, rate limited to one per 3s',async t=>{
   assert.equal(calls.length,1);assert.ok(logs.some(x=>x.stage==='system-one-listen'));assert.ok(logs.some(x=>x.stage==='usage' && x.provider==='system-one' && x.pass==='listen'));
   assert.equal((await request('/api/react',{body})).status,429);assert.equal(calls.length,1);
   clock+=3000;assert.equal((await request('/api/react',{body})).status,200);assert.equal(calls.length,2);
+});
+test('loadKeys strips unquoted trailing comments; .env.example yields no configured keys',async t=>{
+  const dir=await mkdtemp(path.join(tmpdir(),'mintie-keys-')),file=path.join(dir,'c.env');
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  await writeFile(file,'OPENROUTER_API_KEY=   # comment\nELEVENLABS_API_KEY=x # c\nSYSTEM_ONE_API_KEY="q # r" # c\nTYPESAFE_API_KEY=a#b\n');
+  const k=await loadKeys(file);
+  assert.ok(!k.OPENROUTER_API_KEY);assert.equal(k.ELEVENLABS_API_KEY,'x');assert.equal(k.SYSTEM_ONE_API_KEY,'q # r');assert.equal(k.TYPESAFE_API_KEY,'a#b');
+  const example=await loadKeys(new URL('../.env.example',import.meta.url).pathname,[...KEY_NAMES,'CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','SYSTEM_ONE_URL']);
+  assert.ok(Object.values(example).every(v=>!v),JSON.stringify(example));
+});
+test('health reports listen; listening probes 503 without System One; invalid bodies spend no bucket; limits are per client; CSP forbids framing',async t=>{
+  const {request}=await fixture(t,undefined,{now:()=>1000});
+  assert.equal(JSON.parse((await request('/api/health',{method:'GET'})).body).listen,true);
+  const csp=(await request('/',{method:'GET'})).headers['content-security-policy'];
+  assert.match(csp,/frame-ancestors 'none'/);assert.match(csp,/base-uri 'none'/);
+  for(let i=0;i<20;i++)assert.equal((await request('/api/react',{body:{bad:1}})).status,400);
+  assert.equal((await request('/api/react')).status,200);
+  // another client (cf-connecting-ip is honoured) has its own bucket
+  for(let i=0;i<12;i++)await request('/api/react',{headers:{'cf-connecting-ip':'9.9.9.9'}});
+  assert.equal((await request('/api/react',{headers:{'cf-connecting-ip':'9.9.9.9'}})).status,429);
+  assert.equal((await request('/api/react',{headers:{'cf-connecting-ip':'8.8.8.8'}})).status,200);
+});
+test('health listen is false without System One; a listening probe then 503s without spending the bucket',async t=>{
+  const dir=await mkdtemp(path.join(tmpdir(),'mintie-l-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const app=createApp({webRoot:dir,threeDir:dir,catalog:CATALOG,keys:{OPENROUTER_API_KEY:'k'},fetch:async()=>{throw Error('no')},now:()=>1000});
+  const server=http.createServer(app);server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>server.close());
+  const port=server.address().port,call=(p,body)=>fetch(`http://127.0.0.1:${port}${p}`,{method:body?'POST':'GET',headers:{origin:`http://127.0.0.1:${port}`,'content-type':'application/json'},body:body&&JSON.stringify(body)});
+  assert.equal((await (await call('/api/health')).json()).listen,false);
+  assert.equal((await call('/api/react',{text:'one two three four',listening:true})).status,503);
 });

@@ -147,7 +147,7 @@ test('nearest live anchors classify moved face; geometry labels are viewer-left/
   }
 });
 
-test('C9 path and peak speed accumulate; all event values finite and rounded', () => {
+test('path and peak speed accumulate; all event values finite and rounded', () => {
   const d=createTouch();d.step(0);d.pointerDown(hit(),1,ray(0,.5));d.pointerMove(null,ray(.3,.9),101);d.pointerMove(null,ray(.6,.9),301);d.pointerUp(320);
   const events=d.events();contract(events);const release=events.at(-1);assert.equal(release.durationMs,319);near(release.path,.8);near(release.speed,5);assert.equal(release.kind,'drop');
 });
@@ -189,7 +189,7 @@ test('hop refuses contact/held/airborne/reduced motion and invalid targets', () 
   const invalid=createTouch();invalid.step(0);for(const options of [{to:[NaN,0]},{to:[0,0,0]},{height:NaN},{height:0}])assert.equal(invalid.hop(options),false);
 });
 
-test('user-release land carries g/to, release and derivative telemetry stay in C9 ranges', () => {
+test('user-release land carries g/to, release and derivative telemetry stay in range', () => {
   const d=createTouch();d.step(0);d.pointerDown(hit(),1,ray(0,.5));
   d.pointerMove(null,ray(.8,1.8),101);tick(d,17,600);d.pointerMove(null,ray(2,1.8),620);d.pointerUp(630);
   const events=d.events();tick(d,634,4000,()=>events.push(...d.events()));contract(events);

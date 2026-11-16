@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGuard, Ledger, logUsage, costOf, reserveUsd, PRICES, SESSION_SECONDS } from '../server/guard.mjs';
+import { createGuard, Ledger, logUsage, costOf, reserveUsd, PRICES, SESSION_SECONDS, FLAT, ipKey } from '../server/guard.mjs';
 
 const ORIGIN = 'https://mintie.example', PASS = '1x0000000000000000000000000000000AA', FAIL = '2x0000000000000000000000000000000AA', SPENT = '3x0000000000000000000000000000000AA';
 const DAY = 864e5, T0 = 20400 * DAY + 3600e3;
@@ -155,4 +155,40 @@ test('pricing: provider-reported usd wins; table fallbacks; unknown providers ar
 
 test('non-paid routes pass through untouched', async () => {
   const g = rig(); assert.equal((await g.call('/api/other', { method: 'GET' })).status, 200); assert.deepEqual(g.upstream, ['/api/other']);
+});
+
+test('costOf: llm and decision events without cost or tokens get a flat estimate, not $0', () => {
+  assert.equal(costOf({ stage: 'usage', provider: 'openrouter', kind: 'llm', voice: 'words' }), FLAT.openrouter);
+  assert.equal(costOf({ stage: 'usage', provider: 'system-one', kind: 'decision', pass: 'pass1' }), FLAT['system-one']);
+  assert.ok(FLAT.openrouter > 0 && FLAT['system-one'] > 0);
+  assert.equal(costOf({ stage: 'usage', provider: 'openrouter', kind: 'llm', usd: 0 }), 0); // a reported zero still wins
+  assert.equal(costOf({ stage: 'usage', provider: 'openrouter', kind: 'llm', tokens: 1e6 }), 1.2);
+});
+
+test('ipKey: IPv6 collapses to its /64; IPv4 and unknown are untouched', () => {
+  assert.equal(ipKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), ipKey('2001:0DB8:0001:0002::1'));
+  assert.equal(ipKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.notEqual(ipKey('2001:db8:1:3::1'), ipKey('2001:db8:1:2::1'));
+  assert.equal(ipKey('::1'), '0:0:0:0::/64');
+  assert.equal(ipKey('::ffff:1.2.3.4'), '1.2.3.4');
+  assert.equal(ipKey('1.2.3.4'), '1.2.3.4'); assert.equal(ipKey('unknown'), 'unknown');
+});
+
+test('a cookie and caps follow the /64, not the full IPv6 address', async () => {
+  const g = rig(), cookie = await g.login('2001:db8:1:2::1');
+  assert.equal((await g.call('/api/react', { cookie, ip: '2001:db8:1:2:ffff::9' })).status, 200);
+  assert.equal(code(await g.call('/api/react', { cookie, ip: '2001:db8:1:3::1' })), 'human_check');
+});
+
+test('ORIGINS entries are trimmed', async () => {
+  const g = rig({ env: { ORIGINS: ` https://other.example , ${ORIGIN} ` } });
+  assert.ok(await g.login());
+});
+
+test('a failed stt-token mint gives its per-IP session back; a successful one keeps it', async () => {
+  let status = 502;
+  const g = rig({ caps: { ipUsd: 10, ipSessions: 1 }, next: async () => new Response('x', { status }) }), c = await g.login();
+  for (let i = 0; i < 3; i++) assert.equal((await g.call('/api/stt-token', { cookie: c })).status, 502);
+  status = 200; assert.equal((await g.call('/api/stt-token', { cookie: c })).status, 200);
+  assert.equal(code(await g.call('/api/stt-token', { cookie: c })), 'ip_limit');
 });
