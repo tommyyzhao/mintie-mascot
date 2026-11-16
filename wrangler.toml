@@ -13,7 +13,7 @@ directory = ".cf/assets"
 run_worker_first = ["/api/*"]
 
 [vars]
-ORIGINS = "https://mintie.sloprefinery.ai,https://mintie-mascot.tzpersonal.workers.dev"
+ORIGINS = "https://mintie-mascot.<your-subdomain>.workers.dev"
 # Public Turnstile site key (not secret). Create the widget, then paste its sitekey here. Empty = guard on, but /api/health omits turnstile.
 TURNSTILE_SITE_KEY = ""
 # Provider spend caps per UTC day, USD (guard.mjs). Per-IP: dollars and voice sessions.

@@ -15,18 +15,19 @@ export const CSP = "default-src 'self'; script-src 'self' https://challenges.clo
 export const KEY_NAMES = ['OPENROUTER_API_KEY','ELEVENLABS_API_KEY','SYSTEM_ONE_API_KEY','TYPESAFE_API_KEY'];
 const ELEVEN_BASE = 'https://api.elevenlabs.io';
 // Defaults for every swappable piece (contract 8). Env var -> field; empty strings count as unset.
-const CONFIG_DEFAULTS = { llmModel:LLM_MODEL, llmBaseUrl:LLM_BASE_URL, systemOneUrl:JEV_URL, systemOneModel:undefined, voiceId:'ocZQ262SsZb9RIxcQBOj', ttsModel:'eleven_v4_turbo', sttModel:'scribe_v3_live' };
-const CONFIG_ENV = { llmModel:'LLM_MODEL', llmBaseUrl:'LLM_BASE_URL', systemOneUrl:'SYSTEM_ONE_URL', systemOneModel:'SYSTEM_ONE_MODEL', voiceId:'ELEVENLABS_VOICE_ID', ttsModel:'ELEVENLABS_TTS_MODEL', sttModel:'ELEVENLABS_STT_MODEL' };
+const CONFIG_DEFAULTS = { llmModel:LLM_MODEL, llmBaseUrl:LLM_BASE_URL, systemOneUrl:JEV_URL, systemOneModel:undefined, voiceId:'ocZQ262SsZb9RIxcQBOj', ttsModel:'eleven_v4_turbo', sttModel:'scribe_v3_live', systemOneTimeoutMs:SYSTEM_ONE_TIMEOUT_MS };
+const CONFIG_ENV = { llmModel:'LLM_MODEL', llmBaseUrl:'LLM_BASE_URL', systemOneUrl:'SYSTEM_ONE_URL', systemOneModel:'SYSTEM_ONE_MODEL', voiceId:'ELEVENLABS_VOICE_ID', ttsModel:'ELEVENLABS_TTS_MODEL', sttModel:'ELEVENLABS_STT_MODEL', systemOneTimeoutMs:'SYSTEM_ONE_TIMEOUT_MS' };
 export function configFrom(env = {}) {
   const config = {...CONFIG_DEFAULTS};
   for (const [field,name] of Object.entries(CONFIG_ENV)) if (typeof env[name]==='string' && env[name].trim()) config[field]=env[name].trim();
+  config.systemOneTimeoutMs=Number(config.systemOneTimeoutMs);
   return config;
 }
 // ids end up in URLs/JSON bodies: plain tokens only, never a path or a query.
 const validId = x => typeof x==='string' && /^[A-Za-z0-9._:-]{1,64}$/.test(x);
 function validConfig(c) {
   const url = x => { try { const u=new URL(x); return u.protocol==='https:' || u.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(u.hostname); } catch { return false; } };
-  return url(c.llmBaseUrl) && url(c.systemOneUrl) && validId(c.voiceId) && validId(c.ttsModel) && validId(c.sttModel) && (c.systemOneModel===undefined || typeof c.systemOneModel==='string' && c.systemOneModel.length>0 && c.systemOneModel.length<=80) && typeof c.llmModel==='string' && /^[\w./:@-]{1,80}$/.test(c.llmModel);
+  return (c.systemOneTimeoutMs===undefined || Number.isInteger(c.systemOneTimeoutMs) && c.systemOneTimeoutMs>=100 && c.systemOneTimeoutMs<=30000) && url(c.llmBaseUrl) && url(c.systemOneUrl) && validId(c.voiceId) && validId(c.ttsModel) && validId(c.sttModel) && (c.systemOneModel===undefined || typeof c.systemOneModel==='string' && c.systemOneModel.length>0 && c.systemOneModel.length<=80) && typeof c.llmModel==='string' && /^[\w./:@-]{1,80}$/.test(c.llmModel);
 }
 const types = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8', '.wasm':'application/wasm', '.mp3':'audio/mpeg', '.json':'application/json; charset=utf-8', '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png' };
 const tags = new Set(['giggles','laughs','gasps','sighs','happy hum','whispers','squeals','snickers','excited','mischievously','curious']);
@@ -335,9 +336,10 @@ const plainAnswers = c => ({animation:{answer:c.emoji,p:null,top:[]},gaze:{answe
 export const DAILY = { react:2000, say:1500, 'stt-token':300 };
 
 // origins (public mode): exact https origins served behind a TLS proxy; replaces the loopback Host/Origin check.
-export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globalThis.fetch, now = Date.now, log = () => {}, systemOneTimeoutMs = SYSTEM_ONE_TIMEOUT_MS, s2HedgeMs = 900, s2SoundHedgeMs = s2HedgeMs, origins, daily, config = {} }) {
+export function createApp({ webRoot, threeDir, catalog, keys = {}, fetch = globalThis.fetch, now = Date.now, log = () => {}, systemOneTimeoutMs, s2HedgeMs = 900, s2SoundHedgeMs = s2HedgeMs, origins, daily, config = {} }) {
   config = {...configFrom({}), ...config};
   if(!validConfig(config))throw Error('invalid_config');
+  systemOneTimeoutMs ??= config.systemOneTimeoutMs ?? SYSTEM_ONE_TIMEOUT_MS;
   // System One is on with a key, or with any non-default URL (self-hosted OpenJev needs no key); LLM likewise.
   const sysKey = keys.SYSTEM_ONE_API_KEY || keys.TYPESAFE_API_KEY, llmKey = keys.OPENROUTER_API_KEY;
   const sysOn = !!sysKey || config.systemOneUrl !== JEV_URL, llmOn = !!llmKey || config.llmBaseUrl !== LLM_BASE_URL;
