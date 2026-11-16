@@ -17,7 +17,7 @@ const portOption=Number(values.port);
 assert(Number.isInteger(portOption)&&portOption>=0&&portOption<=65535,'Invalid port');
 const run = promisify(execFile), quick = !!values.quick;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const out = fileURLToPath(new URL('./artifacts/check/', import.meta.url));
+const out = fileURLToPath(new URL('./artifacts/check/', import.meta.url)), shots = fileURLToPath(new URL('../tmp/renders/', import.meta.url));
 const server = http.createServer(createApp({ webRoot: `${root}web`, threeDir: dirname(fileURLToPath(import.meta.resolve('three'))), catalog: CATALOG, keys: {}, fetch: () => { throw Error('Provider forbidden'); } }));
 const rows = [], started = performance.now();
 let browser;
@@ -30,6 +30,7 @@ try {
   const port = server.address().port;
   assert(port < 8090 || port > 8120, 'Unexpected reserved ephemeral port');
   const base = `http://127.0.0.1:${port}`;
+  await mkdir(shots, { recursive: true });
   await check('unit', async () => {
     const files = (await readdir(`${root}test`)).filter(f => f.endsWith('.test.mjs')).sort().map(f => `${root}test/${f}`);
     const { stdout } = await run(process.execPath, ['--test', ...files], { timeout: 60000, maxBuffer: 4e6 });
@@ -47,16 +48,17 @@ try {
   await page.route('**/api/stt-token', route => route.fulfill({ status: 403, body: '{}' }));
   await check('smoke', async () => {
     await page.goto(base); await page.waitForFunction(() => window.__mintie?.ready);
-    assert.equal(await page.locator('#name-dialog').isVisible(),true);
+    // No name prompt: straight onto Mintie and the dock, no dialog, no input, a one-line hint that goes away after the first gesture.
+    assert.equal(await page.locator('dialog, input, form, #edit-name').count(), 0);
     await page.waitForFunction(() => !document.getElementById('talk').disabled);
-    await page.locator('#name-input').fill('Alex');await page.locator('#name-input').press('Enter');
-    assert.equal(await page.evaluate(() => window.__micCalls), 1);
+    assert.equal(await page.locator('#hint').isVisible(), true);
+    await page.waitForTimeout(900); await page.screenshot({ path: `${shots}app-default.png` }); // first visit: hint visible
+    await page.locator('#talk').click();
+    await page.waitForFunction(() => window.__micCalls === 1);
+    await page.waitForFunction(() => document.getElementById('hint').hidden);
     await page.route('**/api/health', route => route.fulfill({ json: { ok: false, stt: false, react: false, say: false } }));
     await page.reload(); await page.waitForFunction(() => window.__mintie?.ready);
-    assert.equal(await page.locator('#name-dialog').isVisible(),false);
-    assert.equal(await page.evaluate(()=>localStorage.getItem('mintie-name')),'Alex');
-    await page.locator('#emotions').click(); await page.locator('#edit-name').click();await page.locator('#name-input').fill('María');await page.locator('#name-input').press('Enter');
-    assert.equal(await page.evaluate(()=>localStorage.getItem('mintie-name')),'María');
+    assert.equal(await page.locator('#hint').isHidden(), true); // seen once, never again
     assert.equal(await page.locator('[data-emoji]').count(), Object.keys(CATALOG).length);
     assert.deepEqual(await page.locator('#character').boundingBox(), { x: 0, y: 0, width: 1512, height: 982 });
     assert.equal(await page.locator('#slow, #reduced, .readouts, #live-status, .panel').count(), 0);
@@ -64,7 +66,7 @@ try {
     assert.ok(Math.abs(dock.x + dock.width / 2 - 756) < 1 && dock.y > 850 && dock.height >= 60);
     await page.locator('#emotions').click();
     await page.waitForFunction(() => document.getElementById('emotions').getAttribute('aria-expanded') === 'true');
-    for (const button of ['#emotions', '#edit-name', '[data-emoji="👋"]']) {
+    for (const button of ['#emotions', '[data-emoji="👋"]']) {
       const target = await page.locator(button).boundingBox(); assert.ok(target.width >= 44 && target.height >= 44, button);
     }
     assert.equal(await page.locator('.masthead, #last-reaction').count(), 0);
@@ -80,14 +82,82 @@ try {
     assert.equal(await page.evaluate(() => window.__mintie.history().some(x=>x.who === 'touch' && x.kind === 'poke')), true);
     assert.equal(await page.evaluate(() => window.__mintie.lastRun?.source === 'touch'), false); // Keyless: physics/sfx only.
     await page.locator('#character').focus();
-    for (const [key, kind] of [[' ', 'poke'], ['p', 'pat'], ['f', 'pet_flower']]) { await page.keyboard.press(key); await page.waitForFunction(k => window.__mintie.lastTouch?.kind === k, kind); }
+    for (const [key, kind] of [[' ', 'poke'], ['p', 'pat'], ['c', 'pet']]) { await page.keyboard.press(key); await page.waitForFunction(k => window.__mintie.lastTouch?.kind === k, kind); }
     await page.keyboard.down('l'); await page.waitForFunction(() => window.__mintie.lastTouch?.kind === 'lift'); await page.keyboard.up('l');
     const lastTouch = await page.evaluate(() => window.__mintie.lastTouch); assert.ok(lastTouch.durationMs >= 0 && lastTouch.path >= 0 && Number.isFinite(lastTouch.height));
-    await page.mouse.move(box.x + box.width * .85, box.y + box.height * .2); await page.mouse.down(); await page.mouse.move(box.x + box.width * .85 - 270, box.y + box.height * .2, { steps: 12 }); await page.mouse.up(); await page.mouse.wheel(0, -200);
+    // Fixed camera: dragging empty space moves nothing; the wheel zooms, clamped.
+    const before = await page.evaluate(() => { const v = window.__mintie.view(); return { distance: v.distance, azimuth: v.azimuth, elevation: v.elevation }; });
+    await page.mouse.move(box.x + box.width * .85, box.y + box.height * .2); await page.mouse.down(); await page.mouse.move(box.x + box.width * .85 - 270, box.y + box.height * .2, { steps: 12 }); await page.mouse.up();
+    await page.waitForTimeout(200);
+    const dragged = await page.evaluate(() => { const v = window.__mintie.view(); return { azimuth: v.azimuth, elevation: v.elevation }; });
+    assert.deepEqual(dragged, { azimuth: before.azimuth, elevation: before.elevation }, 'empty-space drag must not orbit');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height * .2);
+    const zoomed = []; for (const dy of [-4000, 4000]) { for (let i = 0; i < 12; i++) await page.mouse.wheel(0, dy / 12); await page.waitForTimeout(1500); zoomed.push(await page.evaluate(() => window.__mintie.view().distance)); }
+    assert.ok(zoomed[0] < before.distance && zoomed[1] > zoomed[0] && zoomed.every(Number.isFinite), JSON.stringify(zoomed));
+    for (let i = 0; i < 40; i++) await page.mouse.wheel(0, -2000);
+    await page.waitForTimeout(2500); const near = await page.evaluate(() => window.__mintie.view().distance);
+    for (let i = 0; i < 40; i++) await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(2500); const far = await page.evaluate(() => window.__mintie.view().distance);
+    assert.ok(near > .3 && far < 60 && near < far, `zoom clamp ${near}..${far}`);
+    // Pointer steers gaze only: moving to a corner and leaving the window both reach the character.
+    await page.mouse.move(40, 40); await page.waitForTimeout(400); const corner = await page.evaluate(() => window.__mintie.view().pointer);
+    assert.ok(corner[0] < -.5 && corner[1] > .5, JSON.stringify(corner));
     await page.emulateMedia({ reducedMotion: 'reduce' }); await page.waitForFunction(() => document.documentElement.dataset.reducedMotion === 'true');
     assert.equal(await page.evaluate(() => window.__micCalls), 0); assert.deepEqual(external, []); assert.deepEqual(errors, []);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     return 'full-viewport stage, centered glass dock, 44px targets, popover/Escape focus, palette, poke, keyboard, automatic reduced motion';
+  });
+  // Memory round-trip with a mocked react stream: sent on every request, replaced by {memory} frames, cleared by Forget me.
+  await check('memory and debug overlay', async () => {
+    const bodies = [], frames = body => ['{"emoji":"👋","gaze":null,"hop":"none"}', '{"voice":"words"}', '{"head":{"line":"Hi Alex!","display":"Hi Alex!"}}', ...body, '{"line":"Hi Alex!","display":"Hi Alex!","ms":12}', '{"cue":null}'].join('\n') + '\n';
+    await page.route('**/api/health', route => route.fulfill({ json: { ok: true, stt: true, react: true, say: true } }));
+    await page.route('**/api/say', route => route.fulfill({ status: 500, body: '{}' }));
+    await page.route('**/api/react', route => {
+      bodies.push(JSON.parse(route.request().postData()));
+      const first = bodies.length === 1;
+      route.fulfill({ contentType: 'application/x-ndjson', body: frames([
+        ...(first ? ['{"memory":{"name":"Alex","facts":["likes tea"]}}'] : []),
+        '{"debug":{"decider":"system-one","model":"jev-27b","ms":143,"answers":{"emote":{"answer":"👋","p":0.81,"top":[["👋",0.81],["😊",0.12],["🤔",0.04]]},"voice":{"answer":"words","p":0.93,"top":[["words",0.93],["sound",0.05],["none",0.02]]}}}}']) });
+    });
+    await page.addInitScript(() => { if (!sessionStorage.__seeded) { sessionStorage.__seeded = 1; localStorage.setItem('mintie-name', 'Legacy'); } });
+    await page.goto(`${base}/?debug`); await page.waitForFunction(() => window.__mintie?.ready);
+    assert.deepEqual(await page.evaluate(() => window.__mintie.memory), { name: 'Legacy', facts: [] }); // old mintie-name migrated
+    assert.equal(await page.evaluate(() => localStorage.getItem('mintie-name')), null);
+    await page.evaluate(() => window.__mintie.simulateCommit('hello there'));
+    await page.waitForFunction(() => window.__mintie.memory.name === 'Alex');
+    await page.evaluate(() => window.__mintie.simulateCommit('hello again'));
+    await page.waitForFunction(() => document.querySelectorAll('#debug .question').length === 2 && document.querySelector('#debug .timeline').textContent.includes('First words'));
+    assert.equal(bodies.length, 2); assert.deepEqual(bodies[0].memory, { name: 'Legacy', facts: [] }); assert.deepEqual(bodies[1].memory, { name: 'Alex', facts: ['likes tea'] });
+    assert.ok(bodies.every(b => b.debug === true && !('name' in b)));
+    assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('mintie-memory'))), { name: 'Alex', facts: ['likes tea'] });
+    const panel = page.locator('#debug');
+    assert.match(await panel.innerText(), /decider: system-one/); assert.match(await panel.innerText(), /jev-27b/); assert.match(await panel.innerText(), /p=0\.81/); assert.match(await panel.innerText(), /Name: Alex/);
+    assert.equal(await panel.locator('.top li').count(), 6); assert.equal(await panel.locator('.timeline li').count(), 5);
+    assert.equal(await panel.getAttribute('aria-label'), 'System One debug');
+    assert.equal(await panel.locator('.flags .flag').count() >= 3, true);
+    await page.screenshot({ path: `${shots}app-debug.png` });
+    await page.keyboard.press('Tab'); // keyboard path: the Forget control is a real button reachable by Tab and Enter
+    await panel.getByRole('button', { name: 'Forget me' }).focus(); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__mintie.memory.name === null);
+    assert.equal(await page.evaluate(() => localStorage.getItem('mintie-memory')), null);
+    assert.match(await panel.innerText(), /not learned yet/);
+    await page.goto(base); await page.waitForFunction(() => window.__mintie?.ready);
+    assert.equal(await page.locator('#debug').count(), 0); // overlay is opt-in
+    await page.unroute('**/api/react'); await page.unroute('**/api/say');
+    return 'legacy name migrated, memory sent every request and replaced by {memory}, debug frames rendered (decider, model, ms, per-question top-3), Forget me clears storage';
+  });
+  await check('guard errors', async () => {
+    await page.route('**/api/react', route => route.fulfill({ status: 429, contentType: 'application/json', body: '{"error":{"stage":"react","code":"daily_limit"}}' }));
+    await page.goto(base); await page.waitForFunction(() => window.__mintie?.ready);
+    await page.evaluate(() => window.__mintie.simulateCommit('hello'));
+    await page.waitForFunction(() => /resting until tomorrow/.test(document.getElementById('status').textContent));
+    assert.equal(await page.locator('#status').evaluate(n => n.classList.contains('sr-only')), false);
+    assert.equal(await page.locator('#controls').getAttribute('data-resting'), 'true');
+    await page.screenshot({ path: `${shots}app-guard.png` });
+    await page.locator('#emotions').click(); await page.locator('[data-emoji="👋"]').click();
+    await page.waitForFunction(() => window.__mintie.performer.active()?.emoji === '👋'); // emotes keep working
+    await page.unroute('**/api/react'); errors.length = 0; // the mocked 429 is logged by the browser as a resource error
+    return 'daily_limit shows kind copy; emotes keep working';
   });
   await check('captions and mobile dock', async () => {
     await page.reload(); await page.waitForFunction(() => window.__mintie?.ready);

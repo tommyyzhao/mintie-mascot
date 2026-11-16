@@ -30,14 +30,14 @@ export async function withAudit(dpr, run, { reducedMotion = 'no-preference', moc
       requests.say++; if (url.includes('/with-timestamps')) return Response.json({ audio_base64: pcm.toString('base64'), alignment: { characters: Array.from(JSON.parse(options.body).text), character_start_times_seconds: Array.from(JSON.parse(options.body).text, (_, i) => i * .015) } });
     return new Response(pcm, { headers: { 'content-type': 'audio/pcm' } });
     }
-    if (url === 'https://api.deepgram.com/v1/auth/grant') {
-      requests.token++; return Response.json({ access_token: 'audit-synthetic-single-use-token', expires_in: 30 });
+    if (url === 'https://api.elevenlabs.io/v1/single-use-token/realtime_scribe') {
+      requests.token++; return Response.json({ token: 'audit-synthetic-single-use-token' });
     }
     if (options.method === 'HEAD') return new Response(null);
     throw new Error(`Unexpected provider path: ${new URL(url).pathname}`);
   };
   const server = http.createServer(createApp({ webRoot, threeDir: path.dirname(fileURLToPath(import.meta.resolve('three'))), catalog: CATALOG,
-    keys: { OPENROUTER_API_KEY: 'fake-audit-selector', ELEVENLABS_API_KEY: 'fake-audit-voice', DEEPGRAM_API_KEY: 'fake-audit-stt' }, fetch: fakeFetch }));
+    keys: { OPENROUTER_API_KEY: 'fake-audit-selector', ELEVENLABS_API_KEY: 'fake-audit-voice' }, fetch: fakeFetch }));
   const profile = await mkdtemp(path.join(tmpdir(), 'mintie-lane-l-'));
   let context;
   try {
@@ -75,12 +75,12 @@ export async function withAudit(dpr, run, { reducedMotion = 'no-preference', moc
       if (mockMic) window.WebSocket = class {
         static OPEN = 1;
         readyState = 1; bufferedAmount = 0;
-        constructor() { setTimeout(() => this.onmessage?.({ data: '{"type":"Connected"}' }), 10); }
+        constructor() { setTimeout(() => this.onmessage?.({ data: '{"message_type":"session_started"}' }), 10); }
         send() {}
         close() { this.readyState = 3; window.__audit.socketsClosed++; }
       };
     }, { mockMic });
-    await page.addInitScript(() => localStorage.setItem('mintie-name', 'Alex'));
+    await page.addInitScript(() => localStorage.setItem('mintie-memory', JSON.stringify({ name: 'Alex', facts: [] })));
     await page.goto(base);
     await page.waitForFunction(() => window.__mintie?.ready && !document.getElementById('talk').disabled);
     const adapter = await page.evaluate(() => window.__mintie.adapter);

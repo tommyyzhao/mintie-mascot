@@ -11,19 +11,13 @@
   <script type="module" src="/main.js"></script>
 </head>
 <body>
-  <dialog id="name-dialog" aria-labelledby="name-label" class="glass">
-    <form id="name-form">
-      <label id="name-label" for="name-input">What is your name?</label>
-      <input id="name-input" name="name" autocomplete="given-name" maxlength="40" required>
-      <button type="submit">Continue</button>
-    </form>
-  </dialog>
   <a class="skip" href="#controls">Skip to controls</a>
   <main class="specimen">
     <h1 class="sr-only">Mintie, a slime blob</h1>
     <section class="stage" id="stage" aria-label="Mintie’s little world">
-      <canvas id="character" tabindex="0" role="group" aria-label="Mintie, a slime blob. Touch them or talk to them." aria-describedby="touch-help" aria-keyshortcuts="Space P F L"></canvas>
-      <p id="touch-help" class="sr-only">With Mintie focused: Space to touch, P to pat, F to pet the sunflower. Hold L to lift them and release to let them down.</p>
+      <canvas id="character" tabindex="0" role="group" aria-label="Mintie, a slime blob. Touch them or talk to them." aria-describedby="touch-help" aria-keyshortcuts="Space P C L"></canvas>
+      <p id="hint" class="hint glass" hidden>Tap Talk to chat · drag Mintie · scroll to zoom</p>
+      <p id="touch-help" class="sr-only">With Mintie focused: Space to touch, P to pat, C to pet the crown. Hold L to lift them and release to let them down.</p>
     </section>
     <div id="caption" class="captions" aria-live="polite" aria-atomic="true">
       <p id="said" class="said" aria-hidden="true" hidden></p>
@@ -48,9 +42,6 @@
     </nav>
     <section id="emotion-picker" class="emotion-picker glass" popover aria-label="Emotions">
       <div id="palette" class="palette"></div>
-      <button id="edit-name" type="button" class="name-link" title="Not you? Change name" aria-label="Not you? Change name">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
-      </button>
     </section>
   </main>
   <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>

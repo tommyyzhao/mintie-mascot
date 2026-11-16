@@ -1,4 +1,5 @@
 import { deformation, shading, jellyUniforms } from './jelly.js';
+import { FACE_YAW } from './view.js';
 
 const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,Number.isFinite(x)?x:0));
 const smin=(a,b,k)=>{const h=Math.max(k-Math.abs(a-b),0)/k;return Math.min(a,b)-h*h*k*.25;};
@@ -18,11 +19,11 @@ export function frontPoint(x,y) {
   for(let i=0;i<25;i++){const z=(lo+hi)/2;if(bodyDistance([x,y,z])>0)hi=z;else lo=z;}
   return [x,y,(lo+hi)/2];
 }
-export const FACE_ANCHORS={eyeL:frontPoint(.105,.395),eyeR:frontPoint(.355,.405),mouth:frontPoint(.23,.285),cheekL:frontPoint(-.025,.285),cheekR:frontPoint(.46,.29),flower:frontPoint(-.30,.865),crown:frontPoint(0,1.105)};
-// Pose gaze [0,0] means "along the body's forward axis", which orient() turns toward the viewer. The eyes sit on the
+export const FACE_ANCHORS={eyeL:frontPoint(.105,.395),eyeR:frontPoint(.355,.405),mouth:frontPoint(.23,.285),cheekL:frontPoint(-.025,.285),cheekR:frontPoint(.46,.29),crown:frontPoint(0,1.105)};
+// Pose gaze [0,0] means "face centre toward the viewer": orient() yaws the body by viewerYaw - FACE_YAW. The eyes sit on the
 // curved face 8° and 32° right of that axis, so centred pupils looked ~19° right of the camera. Per-eye horizontal
 // offset (engine gaze units, 1 unit ≈ .65 rad) re-aims them; vertical is left alone (rest normals already tilt up toward the camera).
-export const EYE_AIM=['eyeL','eyeR'].map(k=>{const n=restNormal(FACE_ANCHORS[k]);return -Math.atan2(n[0],n[2])/.65;});
+export const EYE_AIM=['eyeL','eyeR'].map(k=>{const n=restNormal(FACE_ANCHORS[k]);return -(Math.atan2(n[0],n[2])-FACE_YAW)/.65;});
 function geometry(THREE,width=112,height=72) {
   const positions=[],normals=[],uv=[],indices=[];
   // Star-shaped analytic surface; no marching-grid facets, no hard floor seam.
@@ -75,14 +76,11 @@ export function createBody({THREE,scene,reducedQuality=false}) {
   const air=new THREE.InstancedMesh(new THREE.SphereGeometry(1,24,16),interiorMaterial,4),bubbleMatrix=new THREE.Matrix4();
   [[-.37,.52,.02,.026],[.04,.82,-.07,.023],[.30,.68,-.06,.017],[.38,.25,.08,.023]].forEach(([x,y,z,r],i)=>{bubbleMatrix.makeScale(r,r,r).setPosition(x,y,z);air.setMatrixAt(i,bubbleMatrix);});
   air.instanceMatrix.needsUpdate=true;air.layers.set(1);air.frustumCulled=false;bubbles.add(air);
-  const stemGeometry=new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-.30,.89,.34),new THREE.Vector3(-.32,.69,.22),new THREE.Vector3(-.27,.43,.08),new THREE.Vector3(-.20,.22,.035)]),20,.012,6,false);
-  const stemMaterial=interiorMaterial.clone();stemMaterial.uniforms=uniforms;stemMaterial.transparent=false;stemMaterial.depthWrite=true;
-  stemMaterial.fragmentShader='void main(){gl_FragColor=vec4(.19,.32,.025,1.);\n#include <colorspace_fragment>\n}';
-  const stem=new THREE.Mesh(stemGeometry,stemMaterial);stem.layers.set(1);stem.frustumCulled=false;bubbles.add(stem);mesh.add(bubbles);mesh.layers.set(2);
-  const anchors=Object.fromEntries(['eyeL','eyeR','mouth','cheekL','cheekR','flower','crown'].map(k=>[k,{position:[0,0,0],normal:[0,0,1],up:[0,1,0],scale:1}]));
+  mesh.add(bubbles);mesh.layers.set(2);
+  const anchors=Object.fromEntries(['eyeL','eyeR','mouth','cheekL','cheekR','crown'].map(k=>[k,{position:[0,0,0],normal:[0,0,1],up:[0,1,0],scale:1}]));
   const source=FACE_ANCHORS;
   const V=()=>new THREE.Vector3(),m=new THREE.Matrix4(),r=new THREE.Matrix4(),q=new THREE.Quaternion(),e=new THREE.Euler(),scale=V(),offset=V(),grab=V(),tmp=V();
-  let normalScale=1,touchWeight=0,lastTouchFrame=null,landingAt=-Infinity,wasAirborne=false;
+  let normalScale=1,touchWeight=0,yawWeight=0,lastTouchFrame=null,landingAt=-Infinity,wasAirborne=false;
   function warp(p) {
     const [x,y,z]=p;
     let xx=x,yy=y,zz=z;
@@ -108,11 +106,13 @@ export function createBody({THREE,scene,reducedQuality=false}) {
   function update(pose={},dynamics={},nowMs=0) {
     const raw=pose.body??{},d=dynamics,airborne=d.state==='held'||d.state==='falling'&&!d.hopping;
     const dt=lastTouchFrame===null||nowMs<lastTouchFrame?0:Math.min(100,nowMs-lastTouchFrame);
-    if(lastTouchFrame!==null&&nowMs<lastTouchFrame){touchWeight=0;landingAt=-Infinity;wasAirborne=false;}
+    if(lastTouchFrame!==null&&nowMs<lastTouchFrame){touchWeight=yawWeight=0;landingAt=-Infinity;wasAirborne=false;}
     if(wasAirborne&&!airborne)landingAt=nowMs;
     touchWeight=airborne||nowMs-landingAt<400?1:Math.max(0,touchWeight-dt/180);
+    // The viewer-facing yaw is the largest authored angle (~55°): hand it to physics and back over ~160/180 ms instead of in one frame.
+    yawWeight=touchWeight>yawWeight?Math.min(touchWeight,yawWeight+dt/160):touchWeight;
     lastTouchFrame=nowMs;wasAirborne=airborne;
-    const gain=1-touchWeight,b={...raw,squash:(raw.squash??0)*gain,lean:(raw.lean??[0,0]).map(v=>v*gain),offset:(raw.offset??[0,0,0]).map(v=>v*gain),twist:(raw.twist??0)*gain};
+    const gain=1-touchWeight,b={...raw,squash:(raw.squash??0)*gain,lean:(raw.lean??[0,0]).map(v=>v*gain),offset:(raw.offset??[0,0,0]).map(v=>v*gain),twist:(raw.twist??0)*(1-yawWeight)};
     const tilt=d.tilt??[0,0];
     const squash=clamp(b.squash+(d.squash??0),-.65,.65),sy=1-squash*.65,puff=1+clamp(b.puff??0,-.3,.4)*.30;
     const stretch=clamp(d.stretch??0),wide=1/Math.sqrt(sy),elongation=1+stretch*.64;
@@ -160,5 +160,5 @@ export function createBody({THREE,scene,reducedQuality=false}) {
   update();
   return {mesh,uniforms,anchors,transform,frame,pick,get minScale(){return Math.min(scale.x,scale.y,scale.z)*.78;},
     inversePoint:p=>new THREE.Vector3().fromArray(p).applyMatrix4(inverse).toArray(),
-    update,dispose(){scene.remove(mesh,bubbles);bubbles.children.forEach(o=>{o.geometry.dispose();if(o.isInstancedMesh)o.dispose();});interiorMaterial.dispose();stemMaterial.dispose();mesh.geometry.dispose();material.dispose();proxyGeometry.dispose();proxy.material.dispose();}};
+    update,dispose(){scene.remove(mesh,bubbles);bubbles.children.forEach(o=>{o.geometry.dispose();if(o.isInstancedMesh)o.dispose();});interiorMaterial.dispose();mesh.geometry.dispose();material.dispose();proxyGeometry.dispose();proxy.material.dispose();}};
 }

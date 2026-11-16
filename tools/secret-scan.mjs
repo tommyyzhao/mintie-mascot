@@ -6,7 +6,7 @@ import { loadKeys } from '../server/server.mjs';
 
 const args = process.argv.slice(2);
 if (args.length && (args.length !== 2 || args[0] !== '--env-file' || !args[1])) throw Error('Usage: secret-scan.mjs [--env-file PATH]');
-const names = ['OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'DEEPGRAM_API_KEY', 'TYPESAFE_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_API_TOKEN', 'GROQ_API_KEY', 'SONIOX_API_KEY', 'ASSEMBLYAI_API_KEY', 'SPEECHMATICS_API_KEY', 'CARTESIA_API_KEY'];
+const names = ['OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'SYSTEM_ONE_API_KEY', 'TYPESAFE_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_API_TOKEN', 'GROQ_API_KEY', 'SONIOX_API_KEY', 'ASSEMBLYAI_API_KEY', 'SPEECHMATICS_API_KEY', 'CARTESIA_API_KEY'];
 const values = { ...(args.length ? await loadKeys(args[1], names) : {}), ...Object.fromEntries(names.filter(k => process.env[k]).map(k => [k, process.env[k]])) };
 const keys = Object.values(values).filter(v => v.length >= 12);
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();

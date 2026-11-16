@@ -6,7 +6,6 @@ import { PRIMITIVES } from '../web/perform/emoji.js';
 import { createPerformer } from '../web/perform/engine.js';
 import * as THREE from 'three';
 import { createBody, frontPoint, FACE_ANCHORS, EYE_AIM, restNormal } from '../web/character/body.js';
-import { createFlower } from '../web/character/attach/flower.js';
 import { createEffects } from '../web/character/attach/effects.js';
 import { FX } from '../web/character/attach/atlas.js';
 import { createFace } from '../web/character/attach/face.js';
@@ -105,7 +104,7 @@ test('touch stretch pins the grab; floor, face frames and bud affine stay cohere
    assert.equal(body.uniforms.uTwist.value,0,'rigid spin uses the shared affine, not height-dependent skin torsion');
    const gpuWorld=p=>{const w=det.w*Math.exp(-((p[0]-det.x)**2+(p[1]-det.y)**2+(p[2]-det.z)**2)/n.w);return new THREE.Vector3(p[0]-n.x*w,p[1]-n.y*w,p[2]-n.z*w).applyMatrix4(a).toArray();};
    for(const p of [...Object.values(source),...renderRest])assert.ok(Math.hypot(...gpuWorld(p).map((v,i)=>v-body.transform(p)[i]))<1e-10,'CPU anchor matches vertex shader');
-   for(const [key,p] of Object.entries(source))assert.deepEqual(body.anchors[key].position,body.transform(p),'face, flower and FX share the shader frame');
+   for(const [key,p] of Object.entries(source))assert.deepEqual(body.anchors[key].position,body.transform(p),'face and FX share the shader frame');
    const bud=[.55,.6,.2];assert.ok(Math.hypot(...gpuWorld(bud).map((v,i)=>v-body.transform(bud)[i]))<1e-10,'SDF bud frame includes full rigid twist');
   }
   body.update({}, {},600);const restEye=[...body.anchors.eyeL.position];body.update({body:{twist:2*Math.PI}},{},600);
@@ -135,11 +134,12 @@ test('touch owns airborne body channels and releases without a landing snap', ()
  const body=createBody({THREE,scene:new THREE.Scene(),reducedQuality:true});
  const pose={body:{squash:.3,lean:[.4,.3],offset:[.2,.3,0],twist:.4,wobble:0,puff:0}},p=frontPoint(0,.4);
  try {
-  body.update(pose,{state:'held',com:[0,.6,0]},10);const held=body.transform(p);assert.ok(Math.abs(held[1]-p[1]-.6)<1e-8);
-  body.update(pose,{state:'falling',com:[0,.2,0]},30);
-  body.update(pose,{state:'idle'},50);assert.ok(Math.hypot(...body.transform(p).map((v,i)=>v-p[i]))<1e-8);
-  body.update(pose,{state:'idle'},430);assert.ok(Math.hypot(...body.transform(p).map((v,i)=>v-p[i]))<1e-8);
-  for(let t=450;t<=750;t+=20)body.update(pose,{state:'idle'},t);
+  const run=(dyn,from,to)=>{for(let t=from;t<=to;t+=16)body.update(pose,dyn,t);};
+  run({state:'held',com:[0,.6,0]},10,250);const held=body.transform(p);assert.ok(Math.abs(held[1]-p[1]-.6)<1e-8,'physics owns the pose once the yaw hand-off (160ms) completes');
+  body.update(pose,{state:'falling',com:[0,.2,0]},266);
+  body.update(pose,{state:'idle'},282);assert.ok(Math.hypot(...body.transform(p).map((v,i)=>v-p[i]))<1e-8);
+  run({state:'idle'},298,660);assert.ok(Math.hypot(...body.transform(p).map((v,i)=>v-p[i]))<1e-8);
+  run({state:'idle'},676,1000);
   assert.ok(body.transform(p)[1]>p[1]+.1,'authored pose blends back after landing hold');
  } finally {body.dispose();}
 });
@@ -155,20 +155,6 @@ test('physics hop keeps companion pose and travel yaw in the shared anchor affin
   body.update(pose,{...dynamic,state:'idle',hopping:false,com:[1,0,0],twist:0,facing:0},1000);
   const returned=body.transform([0,.5,.4]);assert.ok(Math.abs(returned[0]-(1+.4*Math.sin(Math.PI/3)/Math.sqrt(1-.12*.65)))<1e-8);
  } finally {body.dispose();}
-});
-
-test('flower pet has independent heavy-head follow-through, no residual jitter', () => {
- const f=createFlower(THREE);
- const pose={perk:0,spin:0,bloom:1};
- try {
-  f.update(pose,{flower:{swing:[0,0]}},0);
-  const rest=f.head.rotation.z;
-  f.update(pose,{flower:{swing:[0,.4]}},17);assert.ok(f.root.children[0].rotation.z>.3);assert.ok(f.head.rotation.z<rest);
-  for(let t=34;t<400;t+=17)f.update(pose,{flower:{swing:[0,.4]}},t);
-  assert.ok(f.head.rotation.z<-.1,'head counter-rotation lags stem');
-  for(let t=400;t<3000;t+=17)f.update(pose,{flower:{swing:[0,0]}},t);
-  assert.ok(Math.abs(f.head.rotation.z)<1e-8);
- } finally {f.dispose();}
 });
 
 const hold=emoji=>{const p=createPerformer();p.play(emoji,{nowMs:0});return p.update(700);};
@@ -238,8 +224,51 @@ test('voice aperture overrides laugh mouth, not its face; opaque buds write dept
  const jelly=await readFile(new URL('../web/character/jelly.js',import.meta.url),'utf8');
  assert.doesNotMatch(buds,/max\(thickness,\.70\)/);assert.match(jelly,/texture2D\(uTransmission,/);
 });
-test('centred pose gaze aims both pupils along body forward (toward the viewer), not 19° right',()=>{
- for(const [i,k] of ['eyeL','eyeR'].entries()){const n=restNormal(FACE_ANCHORS[k]);assert.ok(Math.abs(Math.atan2(n[0],n[2])+EYE_AIM[i]*.65)<1e-9,k);}
+test('centred pose gaze aims both pupils at the viewer once the body yaws the face toward them',()=>{
+ const mid=['eyeL','eyeR','mouth'].map(k=>{const n=restNormal(FACE_ANCHORS[k]);return Math.atan2(n[0],n[2]);});
+ assert.ok(Math.abs((mid[0]+mid[1])/2-FACE_YAW)<.03,'FACE_YAW is the measured eye-midpoint bearing');assert.ok(Math.abs(mid[2]-FACE_YAW)<.1,'mouth agrees');
+ for(const [i,k] of ['eyeL','eyeR'].entries()){const n=restNormal(FACE_ANCHORS[k]);assert.ok(Math.abs(Math.atan2(n[0],n[2])-FACE_YAW+EYE_AIM[i]*.65)<1e-9,k);}
  const face=createFace(THREE,new THREE.PlaneGeometry(),{}),p=createPerformer().update(700);p.eyes={...p.eyes,gaze:[0,.2]};
  face.update(p,16,EYE_AIM);face.eyes.forEach((eye,i)=>assert.deepEqual(eye.material.uniforms.gaze.value.toArray(),[EYE_AIM[i],.2]));face.dispose();
+});
+
+import { FACE_YAW, cameraPosition, gazeTarget, damp, AZIMUTH, ELEVATION, ZOOM_MIN, ZOOM_MAX } from '../web/character/view.js';
+test('fixed camera sits 3/4 left, 20° above; gaze target is the camera plus the pointer offset in its right/up plane', () => {
+ const target=[0,.53,0],d=7,pos=cameraPosition(target,d);
+ assert.ok(pos[0]<0&&pos[1]>target[1]&&pos[2]>0,'left of, above and in front of Mintie');
+ assert.ok(Math.abs(Math.atan2(pos[1]-target[1],Math.hypot(pos[0],pos[2]))-20*Math.PI/180)<1e-9);assert.ok(Math.abs(Math.hypot(pos[0],pos[1]-target[1],pos[2])-d)<1e-9);
+ assert.equal(ELEVATION,20*Math.PI/180);assert.ok(AZIMUTH<0);assert.ok(ZOOM_MIN<1&&ZOOM_MAX>1);
+ // Camera basis for the same pose (what the renderer reads from camera.matrixWorld).
+ const cam=new THREE.PerspectiveCamera();cam.position.fromArray(pos);cam.lookAt(...target);cam.updateMatrixWorld();
+ const right=new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld,0).toArray(),up=new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld,1).toArray();
+ assert.deepEqual(gazeTarget(pos,right,up,0,0),pos,'centre pointer looks straight at the camera');
+ const dist=(a,b)=>Math.hypot(...a.map((v,i)=>v-b[i]));
+ const r=gazeTarget(pos,right,up,1,0),u=gazeTarget(pos,right,up,0,1),c=gazeTarget(pos,right,up,-1,-1);
+ assert.ok(r[0]>pos[0]-1e-9&&Math.abs(dist(r,pos)-2.4)<1e-9,'right edge offsets along camera-right');assert.ok(u[1]>pos[1],'top edge offsets up');
+ assert.ok(c[1]<pos[1]&&dist(c,pos)>2.4,'corner combines both axes');
+ assert.deepEqual(gazeTarget(pos,right,up,9,0),gazeTarget(pos,right,up,1,0),'pointer is clamped to the viewport');
+ assert.deepEqual(gazeTarget(pos,right,up,NaN,NaN),pos);
+ // Zooming out (larger distance) at a fixed world spread means a smaller gaze angle, zooming in a larger one.
+ const angle=distance=>{const p=cameraPosition(target,distance),cr=new THREE.PerspectiveCamera();cr.position.fromArray(p);cr.lookAt(...target);cr.updateMatrixWorld();
+  const g=gazeTarget(p,new THREE.Vector3().setFromMatrixColumn(cr.matrixWorld,0).toArray(),[0,1,0],1,0);return Math.atan(dist(g,p)/distance);};
+ assert.ok(angle(4.2)>angle(7)&&angle(7)>angle(11.5));
+});
+test('damp is critically damped: no overshoot, continuous velocity, frame-rate independent', () => {
+ for(const dt of [1/240,1/60,1/20]){
+  const s={x:0,v:0};let max=0;for(let t=0;t<2;t+=dt)max=Math.max(max,damp(s,1,.15,dt));
+  assert.ok(max<=1+1e-9,'no overshoot');assert.ok(Math.abs(s.x-1)<1e-3,'settles');
+ }
+ const a={x:0,v:0},b={x:0,v:0};for(let i=0;i<60;i++)damp(a,1,.2,1/60);for(let i=0;i<240;i++)damp(b,1,.2,1/240);assert.ok(Math.abs(a.x-b.x)<.01);
+ const s={x:.5,v:0};let prev=s.x,step=0;for(let i=0;i<30;i++){damp(s,1,.2,1/60);step=Math.max(step,Math.abs(s.x-prev));prev=s.x;}assert.ok(step<.05,'a target jump glides');
+});
+
+import { createFloor } from '../web/character/floor.js';
+test('grid floor shares the backdrop radiance, is antialiased by a mipmapped anisotropic tile, fades out, and follows the framed point', () => {
+ const scene=new THREE.Scene(),bg=new THREE.Color('#e2dfda'),floor=createFloor(THREE,scene,bg);
+ try {
+  const src=floor.mesh.material.fragmentShader;
+  assert.match(src,/texture2D/);assert.equal(floor.uniforms.uMap.value.anisotropy,2);assert.ok(floor.uniforms.uMap.value.generateMipmaps,'mipmapped: the sampler antialiases');assert.match(src,/smoothstep\(2\.4,10\./);assert.deepEqual(floor.uniforms.uBase.value.toArray(),bg.toArray(),'same linear base as the backdrop: no horizon seam');
+  floor.update(new THREE.Vector3(2,.5,-1));assert.deepEqual(floor.mesh.position.toArray(),[2,0,-1]);assert.deepEqual(floor.uniforms.uCenter.value.toArray(),[2,-1]);
+  floor.capture(true);assert.equal(floor.mesh.visible,false);floor.capture(false);assert.equal(floor.mesh.visible,true);
+ } finally {floor.dispose();}
 });

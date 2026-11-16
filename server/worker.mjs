@@ -1,28 +1,29 @@
-// Cloudflare Worker. Static files are Workers assets (tools/cf-build.mjs); /api/* runs the same createApp via the node:http bridge.
+// Cloudflare Worker. Static files are Workers assets (tools/cf-build.mjs); /api/* runs the same createApp via the node:http bridge,
+// behind server/guard.mjs (Turnstile cookie, per-IP limits, global USD/day cap).
 import { createServer } from 'node:http';
 import { httpServerHandler } from 'cloudflare:node';
 import { DurableObject, env } from 'cloudflare:workers';
-import { createApp, CSP, DAILY } from './server.mjs';
+import * as app from './server.mjs';
 import { CATALOG } from '../web/perform/emoji.js';
+import { createGuard, Ledger, logUsage } from './guard.mjs';
 
-const keys = Object.fromEntries(['OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'DEEPGRAM_API_KEY', 'TYPESAFE_API_KEY'].filter(k => env[k]).map(k => [k, env[k]]));
-const node = httpServerHandler(createServer(createApp({ webRoot: '/nonexistent', threeDir: '/nonexistent', catalog: CATALOG, keys, origins: env.ORIGINS.split(','), log: v => console.log(JSON.stringify(v)) })));
+const keys = Object.fromEntries(app.KEY_NAMES.filter(k => env[k]).map(k => [k, env[k]]));
+const log = v => { console.log(JSON.stringify(v)); logUsage(v); };
+const node = httpServerHandler(createServer(app.createApp({ webRoot: '/nonexistent', threeDir: '/nonexistent', catalog: CATALOG, keys, origins: env.ORIGINS.split(','), config: app.configFrom(env), log })));
+const num = (v, d) => Number.isFinite(Number(v)) && v !== undefined && v !== '' ? Number(v) : d;
 
-// Per-UTC-day ceilings across every isolate; createApp's token buckets stay per isolate (burst only).
-// ponytail: one global counter; old day keys are never pruned (3 tiny keys/day). Upgrade: alarm cleanup or per-IP budgets if abused.
+// One global instance: the $/day cap and every per-IP row live in its SQLite-backed storage (see guard.mjs).
 export class Budget extends DurableObject {
-  async admit(route) {
-    const key = `${Math.floor(Date.now() / 864e5)}:${route}`, used = (await this.ctx.storage.get(key)) ?? 0;
-    if (used >= DAILY[route]) return false;
-    await this.ctx.storage.put(key, used + 1); return true;
-  }
+  ledger = new Ledger(this.ctx.storage, { dailyUsd: num(this.env.DAILY_USD, 5), ipUsd: num(this.env.IP_USD, 0.25), ipSessions: num(this.env.IP_SESSIONS, 15) });
+  admit(req) { return this.ledger.admit(req); }
+  settle(req) { return this.ledger.settle(req); }
+  alarm() { return this.ledger.prune(); }
 }
 
+const secHeaders = { 'content-security-policy': app.CSP };
 export default {
-  async fetch(request, env, ctx) {
-    const route = request.method === 'POST' && /^\/api\/(react|say|stt-token)$/.exec(new URL(request.url).pathname)?.[1];
-    if (route && !(await env.BUDGET.get(env.BUDGET.idFromName('global')).admit(route)))
-      return Response.json({ error: { stage: route, code: 'daily_limit' } }, { status: 429, headers: { 'content-security-policy': CSP, 'x-content-type-options': 'nosniff' } });
-    return node.fetch(request, env, ctx);
+  fetch(request, env, ctx) {
+    const guard = createGuard({ env, ledger: env.BUDGET.get(env.BUDGET.idFromName('global')), headers: secHeaders });
+    return guard.handle(request, ctx, r => node.fetch(r, env, ctx));
   },
 };

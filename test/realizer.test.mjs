@@ -18,7 +18,7 @@ function client({now=1000,primary='👋'}={}) {
     performer:{play:(...args)=>{plays.push(args);return {id:1};},predictStroke:()=>390,look(){},cancel(){},active:()=>null},touch:{hop:()=>true},
     AbortController,DOMException,TextDecoder,setTimeout,clearTimeout,
     reactionSerial:1,requestSerial:0,run:null,request:null,disposed:false,metrics:{},listening:false,
-    character:{view:{position:[0,1,4]}},dynamics:{com:[0,0,0]},history:[],companionName:'Alex',needs:{event(){},mood:()=>({})},
+    character:{view:{position:[0,1,4]}},dynamics:{com:[0,0,0]},history:[],memory:{get:()=>({name:null,facts:[]}),set(){}},debugPanel:null,needs:{event(){},mood:()=>({})},
     status(){},said(){},t:1000});
   vm.runInContext(callbacks,context);
   context.owner={id:1,emoji:primary,replyAt:0,cues:[],pendingAudio:true,controller:new AbortController(),resolve(){}};
@@ -149,11 +149,11 @@ test('semantic stroke vetoes beats inside inclusive ±350ms; default engine rema
   }
   assert.equal(a.suppressedBeats,1);assert.equal(b.suppressedBeats,0);
 });
-test('received input holds breath, perks eyes/flower; no recipe takeover; next move replaces it',()=>{
+test('received input holds breath, perks eyes; no recipe takeover; next move replaces it',()=>{
   const p=createPerformer({seed:1});p.look('viewer');
   const a=p.update(100,{received:true,listening:true});const b=p.update(300,{received:true,listening:true});
   assert.equal(a.body.squash,-.025);assert.equal(b.body.squash,-.025);
-  assert.equal(a.eyes.openL,1.08);assert.equal(a.eyes.openR,1.08);assert.ok(a.flower.perk>=.18);
+  assert.equal(a.eyes.openL,1.08);assert.equal(a.eyes.openR,1.08);assert.ok(a.body.squash<0);
   assert.equal(p.active(),null);p.play('🎉');assert.equal(p.active().emoji,'🎉');
   assert.notEqual(p.update(600).body.squash,-.025);
 });
@@ -194,4 +194,7 @@ test('listener pauses are bounded, stale replies cancelled, no own-speech calls'
   vm.runInContext("partialText='one two three four'",f.context);release(Response.json({emoji:'👋'}));await flush();assert.equal(f.plays.length,0);
   f.context.audio.speaking=()=>true;
   vm.runInContext("partialText='one two three four five six seven';listenReaction(8000)",f.context);assert.equal(requests,1);
+});
+test('STROKE_MS table matches the sampler for every catalog emoji',()=>{
+  for(const emoji of Object.keys(CATALOG))assert.equal(STROKE_MS[emoji],sampleStroke(emoji),emoji);
 });

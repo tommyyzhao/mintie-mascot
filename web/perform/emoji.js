@@ -52,7 +52,7 @@ export const PRIMITIVES = {
     wilt:body(0.22,0.12,0.18,0,0,-0.15,0.25), spin:body(-0.04,0.08,0,0,0.4,0,0.6,'spin',1.1),
     bow:body(0.08,0,0.42), shrug:body(-0.06,0.08,0,0,0,0.08), flex:body(-0.05,-0.14,0,0,0,0.16,0.35),
     melt:body(0.35,0,0.08,0,0,-0.2,0.35), float:body(-0.06,0,0,0.12,0,0,0.2,'float',0.7),
-    shiver:body(0.02,0,0,0,0,0,0.45,'shake',10), sneak:body(0.15,-0.15,-0.05,0,-0.15),
+    startle:body(-0.12,0,-0.10,0.04,0,0.05,0.45), shiver:body(0.02,0,0,0,0,0,0.45,'shake',10), sneak:body(0.15,-0.15,-0.05,0,-0.15),
   },
   buds: {
     none:hand([]), wave:hand([R([0.5,0.9,0.1])],'wave',2.8),
@@ -102,35 +102,29 @@ export const PRIMITIVES = {
     love:fx('hearts','sparkles'), laugh:fx('tears','sparkles'), shock:fx('exclaim','sweat'),
     rain:fx('tears','sweatdrops'), magic:fx('sparkles','dizzy'), broken:fx('hearts','tears'),
   },
-  flower: {
-    neutral:{perk:0,spin:0,bloom:1}, perk:{perk:0.7,spin:0,bloom:1.15},
-    joy:{perk:1,spin:0.35,bloom:1.2}, shy:{perk:-0.2,spin:0,bloom:0.85},
-    wilt:{perk:-0.85,spin:0,bloom:0.65}, sleep:{perk:-0.5,spin:0,bloom:0.75},
-    alarm:{perk:1,spin:0,bloom:1.1}, spin:{perk:0.5,spin:1.3,bloom:1.1},
-  },
   tint: Object.fromEntries(['none','red','blue','pale','pink','gold'].map(kind=>[kind,{kind,amount:kind==='none'?0:0.65}])),
   accessory:Object.fromEntries(ACCESSORIES.map(kind=>[kind,kind])),
 };
-const BASE = {face:'soft',mouth:'hidden',body:'perk',buds:'none',fx:'none',flower:'neutral',tint:'none',accessory:'none',anticipationMs:180,durationMs:1500,loop:'none'};
+const BASE = {face:'soft',mouth:'hidden',body:'perk',buds:'none',fx:'none',tint:'none',accessory:'none',anticipationMs:180,durationMs:1500,loop:'none'};
 export const FAMILY_DEFAULTS = {
-  smiling:{...BASE,face:'happy',mouth:'smile',flower:'perk'},
-  affection:{...BASE,face:'love',mouth:'smile',body:'sway',fx:'hearts',flower:'joy'},
-  tongue:{...BASE,face:'grin',mouth:'tongue',body:'sway',flower:'perk'},
-  handface:{...BASE,face:'shy',mouth:'smile',body:'shy',flower:'shy'},
+  smiling:{...BASE,face:'happy',mouth:'smile'},
+  affection:{...BASE,face:'love',mouth:'smile',body:'sway',fx:'hearts'},
+  tongue:{...BASE,face:'grin',mouth:'tongue',body:'sway'},
+  handface:{...BASE,face:'shy',mouth:'smile',body:'shy'},
   neutral:{...BASE,face:'blank',mouth:'flat',body:'still'},
-  sleepy:{...BASE,face:'sleepy',body:'sleep',flower:'sleep'},
-  unwell:{...BASE,face:'sick',mouth:'wobble',body:'droop',flower:'wilt'},
-  hat:{...BASE,face:'happy',mouth:'smile',flower:'perk'},
+  sleepy:{...BASE,face:'sleepy',body:'sleep'},
+  unwell:{...BASE,face:'sick',mouth:'wobble',body:'droop'},
+  hat:{...BASE,face:'happy',mouth:'smile'},
   glasses:{...BASE,face:'cool',mouth:'smile',body:'sway'},
-  concerned:{...BASE,face:'worried',mouth:'frown',body:'recoil',flower:'wilt'},
-  negative:{...BASE,face:'angry',mouth:'pout',body:'puff',flower:'alarm'},
-  costume:{...BASE,face:'grin',mouth:'cat',body:'sway',flower:'perk'},
-  cat:{...BASE,face:'happy',mouth:'cat',body:'sway',flower:'perk'},
-  monkey:{...BASE,face:'shy',mouth:'tinyO',body:'shy',flower:'shy'},
-  emotion:{...BASE,face:'happy',mouth:'smile',body:'sway',flower:'perk'},
-  hand:{...BASE,face:'happy',mouth:'smile',body:'perk',flower:'perk',durationMs:1700},
-  person:{...BASE,face:'happy',mouth:'smile',body:'perk',flower:'perk',durationMs:1700},
-  symbol:{...BASE,face:'awe',mouth:'tinyO',body:'perk',flower:'perk'},
+  concerned:{...BASE,face:'worried',mouth:'frown',body:'recoil'},
+  negative:{...BASE,face:'angry',mouth:'pout',body:'puff'},
+  costume:{...BASE,face:'grin',mouth:'cat',body:'sway'},
+  cat:{...BASE,face:'happy',mouth:'cat',body:'sway'},
+  monkey:{...BASE,face:'shy',mouth:'tinyO',body:'shy'},
+  emotion:{...BASE,face:'happy',mouth:'smile',body:'sway'},
+  hand:{...BASE,face:'happy',mouth:'smile',body:'perk',durationMs:1700},
+  person:{...BASE,face:'happy',mouth:'smile',body:'perk',durationMs:1700},
+  symbol:{...BASE,face:'awe',mouth:'tinyO',body:'perk'},
 };
 export const CATALOG = {};
 function add(family, emoji, name_es, name_en, overrides={}) {
@@ -151,10 +145,10 @@ t('😋','qué rico','savoring food',{face:'closed',body:'sway'});
 t('😜','lengüita con guiño','winking tongue',{face:'wink',body:'bounce'});
 t('🤑','ojitos de dinero','money mouth',{face:'money',mouth:'tongue',body:'puff',fx:'sparkle'});
 const h=(e,es,en,r)=>add('handface',e,es,en,r);
-h('🤗','abrazo de gomita','hugging',{face:'happy',mouth:'beam',body:'sway',buds:'hug',flower:'joy'});
+h('🤗','abrazo de gomita','hugging',{face:'happy',mouth:'beam',body:'sway',buds:'hug'});
 h('🤫','shhh','shushing',{face:'soft',mouth:'tinyO',buds:'shush',body:'still'});
 h('🤔','a ver déjame pensar','thinking',{face:'think',mouth:'pout',buds:'chin',body:'still',fx:'question'});
-h('🫡','a la orden','saluting',{mouth:'hidden',face:'happy',buds:'salute',body:'perk',flower:'perk'});
+h('🫡','a la orden','saluting',{mouth:'hidden',face:'happy',buds:'salute',body:'perk'});
 const n=(e,es,en,r)=>add('neutral',e,es,en,r);
 n('😐','cara de nada','deadpan neutral face',{mouth:'hidden'});
 n('🤨','ceja levantada','raised eyebrow',{face:'suspicious',body:'shrug',mouth:'hidden',fx:'question'});
@@ -169,12 +163,12 @@ u('🤢','me da cosita','nauseated',{mouth:'wobble',body:'sway',fx:'sweat'});
 u('🤧','achú','sneezing',{face:'squint',mouth:'gasp',buds:'mouth',body:'nod',fx:'drops'});
 u('🥵','mucho calor','hot',{face:'worried',mouth:'tongue',body:'droop',tint:'red',fx:'drops'});
 u('🥶','qué frío','cold',{face:'worried',mouth:'teeth',body:'shiver',tint:'blue',fx:'sweat'});
-u('😵‍💫','todo da vueltas','spiral eyes',{face:'dizzy',mouth:'gasp',body:'spin',fx:'dizzy',flower:'spin'});
+u('😵‍💫','todo da vueltas','spiral eyes',{face:'dizzy',mouth:'gasp',body:'spin',fx:'dizzy'});
 const g=(e,es,en,r)=>add('glasses',e,es,en,r);
 g('😎','con toda la onda','cool',{mouth:'hidden',accessory:'sunglasses',body:'sway'});
 const c=(e,es,en,r)=>add('concerned',e,es,en,r);
 c('😟','preocupadita','worried',{mouth:'hidden',face:'worried',body:'tremble'});
-c('😮','oh','open mouth',{face:'surprise',mouth:'gasp',flower:'alarm'});
+c('😮','oh','open mouth',{face:'surprise',mouth:'gasp',body:'startle'});
 c('😳','tierra trágame','flushed',{face:'surprise',mouth:'hidden',body:'shy',tint:'pink',fx:'blush'});
 c('🥺','porfiii','pleading',{face:'plead',mouth:'hidden',body:'plead',buds:'none'});
 c('😭','llanto de drama','loudly crying',{face:'sob',mouth:'sob',body:'laugh',fx:'tears',durationMs:1900});
@@ -188,7 +182,7 @@ m('🙈','no veo','see no evil',{face:'closed',mouth:'hidden',buds:'eyes',body:'
 m('🙉','no escucho','hear no evil',{mouth:'hidden',face:'squint',buds:'ears',body:'no'});
 const em=(e,es,en,r)=>add('emotion',e,es,en,r);
 em('❤️','te quiero','love',{mouth:'hidden',face:'love',body:'puff',buds:'heart',fx:'hearts'});
-em('💔','corazón roto','broken heart',{face:'cry',mouth:'hidden',body:'droop',fx:'broken',flower:'wilt'});
+em('💔','corazón roto','broken heart',{face:'cry',mouth:'hidden',body:'wilt',fx:'broken'});
 const hd=(e,es,en,r)=>add('hand',e,es,en,r);
 hd('👋','holaaa','waving',{mouth:'hidden',buds:'wave',body:'sway',durationMs:1900});
 hd('🤏','poquitito','pinching hand',{mouth:'hidden',buds:'tiny',face:'squint',body:'shy'});
@@ -213,7 +207,7 @@ sy('🎉','fiestaaa','party popper',{face:'grin',mouth:'laugh',buds:'celebrate',
 sy('🔥','está que arde','fire',{face:'smug',mouth:'hidden',body:'puff',fx:'fire',tint:'red'});
 sy('👀','ojito al dato','eyes',{face:'surprise',mouth:'hidden',body:'sneak'});
 sy('💡','se me prendió el foco','light bulb',{face:'surprise',mouth:'hidden',buds:'lesson',body:'perk',fx:'idea'});
-p('💃','a bailar','dancing',{mouth:'hidden',face:'grin',body:'spin',buds:'celebrate',fx:'music',flower:'spin'});
+p('💃','a bailar','dancing',{mouth:'hidden',face:'grin',body:'spin',buds:'celebrate',fx:'music'});
 p('🙂‍↕️','sí, sí','nod yes',{face:'soft',mouth:'hidden',body:'still',buds:'none',loop:'yes'});
 p('🙂‍↔️','no, no','shake head no',{face:'soft',mouth:'hidden',body:'still',buds:'none',loop:'headshake'});
 p('🦘','¡salto!','hop',{face:'soft',mouth:'hidden',body:'still',buds:'none',loop:'jump',anticipationMs:140});
@@ -295,7 +289,7 @@ export function resolveRecipe(value) {
   if (!value || typeof value!=='object' || Array.isArray(value)) throw new TypeError('Invalid recipe');
   if (Object.keys(value).some(key=>!Object.hasOwn(BASE,key))) throw new RangeError('Unknown recipe field');
   const result={...BASE,...value};
-  for (const key of ['face','mouth','body','buds','fx','flower','tint','accessory']) {
+  for (const key of ['face','mouth','body','buds','fx','tint','accessory']) {
     if (typeof result[key]!=='string' || !Object.hasOwn(PRIMITIVES[key],result[key])) throw new RangeError(`Unknown ${key} primitive`);
   }
   if (!Number.isFinite(result.anticipationMs) || result.anticipationMs<80 || result.anticipationMs>350 ||

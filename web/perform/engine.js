@@ -1,4 +1,5 @@
 import { PRIMITIVES, resolveRecipe } from './emoji.js';
+import { FACE_YAW } from '../character/view.js';
 
 const TAU=Math.PI*2;
 const finite=(v,fallback=0)=>Number.isFinite(v)?v:fallback;
@@ -6,6 +7,8 @@ const clamp=(v,lo=0,hi=1)=>Math.min(hi,Math.max(lo,finite(v)));
 const mix=(a,b,t)=>a+(b-a)*t;
 const smooth=t=>(t=clamp(t))*t*(3-2*t);
 const ease=t=>1-(1-clamp(t))**3;
+// Smoothstep attack: peak slope 1.5/attack, zero onset velocity (the old cubic-out had 3/attack at frame 0, a ~25% one-frame jump).
+const attackCurve=smooth;
 const lerpArray=(a,b,t)=>a.map((v,i)=>mix(v,b[i],t));
 const worldPoint=v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite)?v:null;
 const angle=v=>Math.atan2(Math.sin(v),Math.cos(v));
@@ -30,7 +33,7 @@ function copy(p) {
     body:{...p.body,lean:[...p.body.lean],offset:[...p.body.offset]},
     eyes:{...p.eyes,gaze:[...p.eyes.gaze]},mouth:{...p.mouth},cheeks:{...p.cheeks},
     buds:p.buds.map(b=>({...b,dir:[...b.dir]})),
-    flower:{...p.flower},fx:p.fx.map(f=>({...f})),tint:{...p.tint},accessory:p.accessory,
+    fx:p.fx.map(f=>({...f})),tint:{...p.tint},accessory:p.accessory,
   };
 }
 function blend(a,b,t) {
@@ -55,7 +58,6 @@ function blend(a,b,t) {
     bud.contact=t<0.5?start.contact:end.contact;
     if (bud.reach>0.0001) p.buds.push(bud);
   }
-  for (const key of ['perk','spin','bloom']) p.flower[key]=mix(a.flower[key],b.flower[key],t);
   // Merge effects by kind, preserving at most the three strongest during crossfades.
   const effects=new Map(a.fx.map(f=>[f.kind,f.intensity*(1-t)]));
   for (const f of b.fx) effects.set(f.kind,(effects.get(f.kind)??0)+f.intensity*t);
@@ -83,8 +85,6 @@ function bound(p,reduced) {
     for (const key of ['height','reach','bulge']) b[key]=clamp(b[key]);
     b.dir=normalize(b.dir.map(x=>clamp(x,-1,1)));
   }
-  p.flower.perk=clamp(p.flower.perk,-1,1); p.flower.spin=reduced?0:clamp(p.flower.spin,-2,2);
-  p.flower.bloom=clamp(p.flower.bloom,0.6,1.2);
   for (const f of p.fx) f.intensity=clamp(f.intensity);
   p.tint.amount=clamp(p.tint.amount);
   return p;
@@ -101,13 +101,45 @@ export function createPerformer({seed=1,now}={}) {
   let lastActivity=null, lastInputGaze=null, wakeStart=-Infinity;
   let listenStart=null, listenPhase=0, listenTilt=0, attention=0;
   let lastAmplitude=0, beatAt=-Infinity, beatAttemptAt=-Infinity, beatCount=0, suppressedBeats=0, thinkingAt=null, thought=0, thoughtSide=-1;
-  let lookRequest=null, lookYaw=0, lookWeight=0, lookGaze=[0,0];
+  let lookRequest=null, lookYaw=0, lookWeight=0, lookGaze=[0,0], lookInit=false;
+  // Viewer awareness: eyes chase `inputs.attend` (camera + pointer offset) on a fast critically damped spring and lead the
+  // slower body yaw; saccades and micro-drift keep them alive. Eye state is advanced once per update(), never in sample().
+  const awareRandom=randomSource(`${seed}:aware`);
+  const AMBIENT_FOLLOW=.5, BODY_PITCH=.18;
+  let aw={eye:[{x:0,v:0},{x:0,v:0}],saccade:[0,0],saccadeAt:0,pitch:0,active:false};
+  function attendAngles(inputs,self) {
+    const point=worldPoint(inputs.attend);if(!point)return null;
+    const delta=point.map((v,i)=>v-self[i]-(i===1?.65:0));
+    return {yaw:Math.atan2(delta[0],delta[2]),pitch:Math.atan2(delta[1],Math.hypot(delta[0],delta[2]))};
+  }
+  // Critically damped (no overshoot, continuous velocity): a cursor jump becomes a fast glide, never a one-frame snap.
+  function spring(s,target,smoothTime,dt) {
+    const w=2/smoothTime,x=w*dt,e=1/(1+x+.48*x*x+.235*x*x*x),change=s.x-target,temp=(s.v+w*change)*dt;
+    s.v=(s.v-w*temp)*e;s.x=target+(change+temp)*e;
+  }
+  function aware(time,dt,inputs) {
+    const self=worldPoint(inputs.self)||[0,0,0],a=attendAngles(inputs,self);
+    aw.active=!!a;if(!a)return;
+    const amount=inputs.reducedMotion?.35:1;
+    if (time>=aw.saccadeAt) {
+      // Fixational saccades: small, abrupt (the spring turns them into ~80ms flicks), 0.5-2.5 s apart.
+      const big=awareRandom()<.18;
+      aw.saccade=[(awareRandom()-.5)*(big?.30:.10),(awareRandom()-.5)*(big?.16:.05)];
+      aw.saccadeAt=time+500+awareRandom()*2000;
+    }
+    const sec=time/1000,drift=[Math.sin(sec*1.9+phase)*.012+Math.sin(sec*5.3)*.005,Math.sin(sec*1.3+phase*2)*.010+Math.sin(sec*4.1)*.004];
+    const target=[clamp(angle(a.yaw-FACE_YAW-(inputs.reducedMotion?0:lookYaw))/.65,-.9,.9),clamp(a.pitch/.65,-.5,.6)];
+    aw.pitch=a.pitch;
+    for (let i=0;i<2;i++) spring(aw.eye[i],target[i]+(aw.saccade[i]+drift[i])*amount,.07,dt/1000);
+  }
+  // Body faces the camera; the pointer offset turns it only part of the way, the eyes take the rest.
+  const ambientYaw=(inputs,viewerYaw,self)=>{const a=attendAngles(inputs,self);return a?viewerYaw+angle(a.yaw-viewerYaw)*AMBIENT_FOLLOW:viewerYaw;};
   function orient(p,time,dt,inputs) {
     if (lookRequest && time>=lookRequest.until) lookRequest=null;
     const self=worldPoint(inputs.self)||[0,0,0], viewer=worldPoint(inputs.viewer)||[0,.65,7];
     const delta=viewer.map((v,i)=>v-self[i]-(i===1?.65:0)), viewerYaw=Math.atan2(delta[0],delta[2]);
     const explicit=lookRequest?.mode, mode=explicit||((inputs.listening||inputs.talking||clamp(inputs.speaking)>.02)&&!inputs.thinking?'viewer':null);
-    let yaw=viewerYaw, gaze=[0,0];
+    let yaw=mode==='viewer'||!inputs.attend?viewerYaw:ambientYaw(inputs,viewerYaw,self), gaze=[0,0];
     if (mode==='away') { yaw+=.8;gaze=[.9,.10]; }
     if (mode==='down') gaze=[.12,-.9];
     if (mode==='up') gaze=[-.15,.9];
@@ -116,14 +148,17 @@ export function createPerformer({seed=1,now}={}) {
       yaw=Math.atan2(target[0],target[2]);
       gaze=[0,clamp(Math.atan2(target[1],Math.hypot(target[0],target[2]))/.65,-1,1)];
     }
+    yaw-=FACE_YAW; // the face, not the body's forward axis, is what should point at the target
+    if (!lookInit) {lookYaw=yaw;lookInit=true;} // start already facing it: no turn-in swing on load
     // ponytail: yaw plus two-axis eye aim, not an articulated neck; upgrade only with a neck rig.
     lookYaw+=angle(yaw-lookYaw)*(1-Math.exp(-dt/(inputs.reducedMotion?600:240)));
     lookWeight+=((mode?1:0)-lookWeight)*(1-Math.exp(-dt/160));
-    const residual=angle(yaw-lookYaw);
+    const residual=angle(yaw-(inputs.reducedMotion?0:lookYaw)); // reduced motion never turns the body, so the eyes take the whole angle
     gaze[0]=clamp(gaze[0]+Math.sin(residual)*.9,-1,1);
     if(mode==='viewer') gaze[1]=clamp(Math.atan2(delta[1],Math.hypot(delta[0],delta[2]))/.65,-.45,.45);
     lookGaze=lerpArray(lookGaze,gaze,1-Math.exp(-dt/110));
     p.body.twist+=lookYaw;
+    if (aw.active&&!mode) p.body.lean[1]-=clamp(aw.pitch-.25,-.35,.35)*BODY_PITCH*(inputs.reducedMotion?.35:1);
     p.body.lean[1]+=(explicit==='down'?-.045:explicit==='away'?-.025:explicit?.025:0)*lookWeight*(inputs.reducedMotion?.35:1);
     p.eyes.gaze=lerpArray(p.eyes.gaze,lookGaze,lookWeight);
     return bound(p,!!inputs.reducedMotion);
@@ -154,11 +189,11 @@ export function createPerformer({seed=1,now}={}) {
     for (const key of ['smileL','smileR']) p.eyes[key]=mix(p.eyes[key],.10,thought);
     const amount=reduced?.35:1;
     p.body.lean[0]+=(thoughtSide*.12+Math.sin(thoughtAge/1000*1.8)*.025)*thought*amount;
-    p.flower.perk=mix(p.flower.perk,-.20*amount,thought);
+    p.body.squash=mix(p.body.squash,p.body.squash+.02*amount,thought);
     if(inputs.received) {
       // Local uptake, not another recipe: hold the breath and viewer attention until pass 1.
       p.body.squash=-.025*(reduced?.35:1);p.body.lean[1]+=.025*(reduced?.35:1);
-      p.eyes.openL=p.eyes.openR=1.08;p.flower.perk=Math.max(p.flower.perk,.18);
+      p.eyes.openL=p.eyes.openR=1.08;
     }
     return bound(p,reduced);
   }
@@ -182,7 +217,6 @@ export function createPerformer({seed=1,now}={}) {
     const w=smooth((u-0.14)/0.18)*(1-smooth((u-0.66)/0.34))*amount;
     const swing=Math.sin((u-0.14)*TAU*1.5)*w;
     p.body.squash+=0.009*anticipation*amount;
-    p.flower.perk-=0.025*anticipation*amount;
     switch (micro.kind) {
       case 0: // A thought catches their eye; the body follows a beat behind.
         p.eyes.gaze=lerpArray(p.eyes.gaze,micro.gaze,w);
@@ -191,20 +225,21 @@ export function createPerformer({seed=1,now}={}) {
         break;
       case 1:
         p.body.squash+=0.026*swing;p.body.lean[0]+=0.022*swing;
-        p.flower.perk+=0.13*Math.sin((u-0.22)*TAU*1.5)*w;
+        p.body.puff+=0.02*Math.sin((u-0.22)*TAU*1.5)*w;
         break;
-      case 2:
-        p.eyes.gaze=lerpArray(p.eyes.gaze,[-0.65,0.65],w);
-        p.body.lean[0]-=0.018*w;p.flower.perk+=0.26*w;
+      case 2: { // A bud pops out and waves hello, then tucks back.
+        const bud=Math.sin(Math.PI*clamp((u-0.14)/0.72))**1.5*amount;
+        p.buds=[{side:'R',height:0.48,reach:0.7*bud,dir:[0.5+0.3*Math.sin((u-0.3)*TAU*2.2)*bud,0.85,0.1],contact:'none',bulge:0}].filter(b=>b.reach>0.0001);
+        p.eyes.gaze=lerpArray(p.eyes.gaze,[0.35,0.3],w);p.body.lean[0]-=0.012*w;p.body.squash-=0.02*w;
         p.eyes.smileL+=0.12*w;p.eyes.smileR+=0.12*w;
-        break;
+        break; }
       case 3:
-        p.body.lean[0]+=0.028*swing;p.flower.perk+=0.065*swing;
+        p.body.lean[0]+=0.028*swing;p.body.squash-=0.012*swing;
         p.eyes.openL*=1-0.22*w;p.eyes.openR*=1-0.22*w;
         p.eyes.smileL+=0.3*w;p.eyes.smileR+=0.3*w;
         break;
       case 4:
-        p.body.puff+=0.045*w;p.body.squash-=0.022*w;p.flower.perk+=0.15*w;
+        p.body.puff+=0.045*w;p.body.squash-=0.04*w;
         p.eyes.openL*=1-0.16*w;p.eyes.openR*=1-0.16*w;
         break;
       case 5: {
@@ -239,16 +274,15 @@ export function createPerformer({seed=1,now}={}) {
     const breath=TAU*(sec*0.25-Math.max(0,quiet-40000)/1000*0.06-Math.max(0,quiet-75000)/1000*0.01)+phase;
     const lids=1-0.43*drowsy;
     const p={
-      body:{squash:Math.sin(breath)*(0.02+0.006*drowsy)*amount,
+      // Two incommensurate sines plus a slow depth swell: breathing never repeats exactly (the single sine did every 4 s).
+      body:{squash:(Math.sin(breath)*(0.02+0.006*drowsy)*(1+.22*Math.sin(sec*.113+phase*3))+.004*Math.sin(sec*.43+phase*2))*amount,
         lean:[Math.sin(sec*0.37+phase)*0.008*amount*(1-0.75*drowsy),0],
         offset:[0,0,0],twist:0,wobble:0.035*amount*(1-0.7*drowsy),puff:0},
       eyes:{openL:lids*(1-blink),openR:lids*(1-blink),
         smileL:0,smileR:0,frown:0,
-        gaze:lerpArray(lerpArray(gazeFrom,gazeTo,smooth((time-gazeStart)/1200)),[0,-0.36],drowsy*0.85),
+        gaze:lerpArray(aw.active?[aw.eye[0].x,aw.eye[1].x]:lerpArray(gazeFrom,gazeTo,smooth((time-gazeStart)/1200)),[0,-0.36],drowsy*0.85),
         pupil:1,icon:'none'},
       mouth:{open:0,smile:0,width:0.5,shape:'none'},cheeks:{blush:0},buds:[],
-      flower:{perk:Math.sin(sec*1.2+phase)*0.045*amount*(1-drowsy)-
-        (0.2+0.55*smooth((quiet-40000)/35000))*drowsy*amount,spin:0,bloom:1},
       fx:[],tint:{kind:'none',amount:0},accessory:'none',
     };
     microBehavior(p,absoluteTime,amount,!inputs.needsDrowsy&&!current&&absoluteTime>=blockedUntil&&
@@ -263,14 +297,14 @@ export function createPerformer({seed=1,now}={}) {
       p.eyes.gaze=p.eyes.gaze.map(v=>v*(1-0.95*w));
       p.eyes.openL+=0.08*w;p.eyes.openR+=0.08*w;
       p.eyes.smileL+=0.1*w;p.eyes.smileR+=0.1*w;
-      p.flower.perk+=0.1*w*amount;
+      p.body.squash-=0.012*w*amount;
     } else if (!inputs.listening) listenStart=null;
     const wakeAge=absoluteTime-wakeStart;
     if (wakeAge>=0&&wakeAge<300) {
       const pop=Math.sin(Math.PI*wakeAge/300);
       p.eyes.openL=mix(p.eyes.openL,1.2,pop);p.eyes.openR=mix(p.eyes.openR,1.2,pop);
       p.body.squash+=0.055*Math.sin(wakeAge/300*TAU)*amount;
-      p.body.offset[1]+=0.025*pop*amount;p.flower.perk+=0.45*pop*amount;
+      p.body.offset[1]+=0.025*pop*amount;p.body.puff+=0.05*pop*amount;
     }
     // Active listening looks at the speaker, not a wandering pointer.
     if (Array.isArray(inputs.gaze)) p.eyes.gaze=inputs.gaze.map(v=>clamp(v,-1,1)*(1-0.95*attention));
@@ -279,7 +313,7 @@ export function createPerformer({seed=1,now}={}) {
   function envelope(age,r) {
     const attack=170, release=380, releaseAt=r.durationMs-release;
     if (age<r.anticipationMs) return {anticipation:true,w:Math.sin(Math.PI*clamp(age/r.anticipationMs)),hold:0,release:1};
-    const elapsed=age-r.anticipationMs, inWeight=ease(elapsed/attack);
+    const elapsed=age-r.anticipationMs, inWeight=attackCurve(elapsed/attack);
     const outWeight=1-smooth((age-releaseAt)/release);
     return {anticipation:false,w:inWeight*outWeight,hold:elapsed,release:outWeight};
   }
@@ -292,7 +326,6 @@ export function createPerformer({seed=1,now}={}) {
       p.body.lean[0]-=b.lean[0]*0.18*w*amount;
       p.body.lean[1]-=b.lean[1]*0.18*w*amount;
       p.eyes.openL*=1-0.16*w; p.eyes.openR*=1-0.16*w;
-      p.flower.perk-=0.12*w*amount;
       return p;
     }
     const sec=env.hold/1000, osc=Math.sin(sec*TAU*b.hz), motion=r.loop;
@@ -337,10 +370,6 @@ export function createPerformer({seed=1,now}={}) {
     const m=PRIMITIVES.mouth[r.mouth];
     for (const key of ['open','smile','width']) p.mouth[key]=mix(p.mouth[key],m[key],w);
     p.mouth.shape=w>0.08?m.shape:'none'; p.cheeks.blush=f.blush*w;
-    const flower=PRIMITIVES.flower[r.flower];
-    p.flower.perk=mix(p.flower.perk,flower.perk*amount,w);
-    p.flower.spin=mix(p.flower.spin,flower.spin*amount,w);
-    p.flower.bloom=mix(p.flower.bloom,1+(flower.bloom-1)*amount,w);
     const hands=PRIMITIVES.buds[r.buds], growth=ease(env.hold/235);
     const reachGain=growth+Math.sin(Math.PI*clamp((env.hold-120)/180))*0.10;
     p.buds=hands.poses.map(template=>{
@@ -406,14 +435,14 @@ export function createPerformer({seed=1,now}={}) {
     return {values:[lastTime,serial,current?{...current}:null,previous,idleOrigin,nextBlink,blinkStart,doubleBlink,
       nextGaze,gazeStart,gazeFrom,gazeTo,micro,requestedMicro,blockedUntil,lastActivity,lastInputGaze,wakeStart,
       listenStart,listenPhase,listenTilt,attention,lastAmplitude,beatAt,beatAttemptAt,beatCount,suppressedBeats,
-      thinkingAt,thought,thoughtSide,lookRequest,lookYaw,lookWeight,lookGaze,talkStart,talkFrom],random:random.state(),listen:listenRandom.state()};
+      thinkingAt,thought,thoughtSide,lookRequest,lookYaw,lookWeight,lookGaze,talkStart,talkFrom,lookInit],aw:{...aw,eye:aw.eye.map(e=>({...e})),saccade:[...aw.saccade]},random:random.state(),listen:listenRandom.state(),aware:awareRandom.state()};
   }
   function restoreState(s) {
     [lastTime,serial,current,previous,idleOrigin,nextBlink,blinkStart,doubleBlink,
       nextGaze,gazeStart,gazeFrom,gazeTo,micro,requestedMicro,blockedUntil,lastActivity,lastInputGaze,wakeStart,
       listenStart,listenPhase,listenTilt,attention,lastAmplitude,beatAt,beatAttemptAt,beatCount,suppressedBeats,
-      thinkingAt,thought,thoughtSide,lookRequest,lookYaw,lookWeight,lookGaze,talkStart,talkFrom]=s.values;
-    random.restore(s.random);listenRandom.restore(s.listen);
+      thinkingAt,thought,thoughtSide,lookRequest,lookYaw,lookWeight,lookGaze,talkStart,talkFrom,lookInit]=s.values;
+    random.restore(s.random);listenRandom.restore(s.listen);awareRandom.restore(s.aware);aw=s.aw;
   }
   const api = {
     // Synchronous dry run; restore all engine/PRNG state before returning. Never called by update().
@@ -442,7 +471,7 @@ export function createPerformer({seed=1,now}={}) {
       blinkStart=cueBlink=at;doubleBlink=false;nextBlink=Math.max(nextBlink,at+2000);return true;
     },
     micro(kind) {
-      const index=['look','wiggle','sunflower','hum-sway','stretch','double-blink'].indexOf(kind);
+      const index=['look','wiggle','bud-wave','hum-sway','stretch','double-blink'].indexOf(kind);
       if(index<0) throw new RangeError('Invalid micro behavior');
       requestedMicro=index;
     },
@@ -499,6 +528,7 @@ export function createPerformer({seed=1,now}={}) {
         if (gazeActivity) lastInputGaze=gaze;
       } else lastInputGaze=null;
       if (gazeActivity||inputs.listening||clamp(inputs.speaking)>0.02) activity(time);
+      aware(time,dt,inputs);
       const p=sample(time,inputs); previous=copy(p);
       conversation(p,time,dt,inputs);
       orient(p,time,dt,inputs);

@@ -8,6 +8,8 @@ import { createTrace } from './trace.js';
 import { STROKE_THRESHOLDS, cuePlan, nodAllowed, beatsSuppressed } from './realizer.js';
 import { createNeeds } from './needs.js';
 import { speakCascade } from './stream.js';
+import { createMemory } from './memory.js';
+import { ensureSession } from './turnstile.js';
 
 const elements = new Map([...document.querySelectorAll('[id]')].map(node => [node.id, node]));
 const $ = id => elements.get(id);
@@ -17,31 +19,9 @@ let selectedButton;
 const audio = createAudio({event:(type,data)=>{if(trace.enabled)trace.emit(type,{fadeMs:data.fadeMs,startAt:trace.mapping(data.at).at,endAt:trace.mapping(data.end).at});}}), touch = createTouch(), needs = createNeeds();
 let t = 0, lastFrame = performance.now(), frameId, character;
 let listening = false, dynamics = {com:[0,0,0],state:'idle'}, reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let companionName = '';
-try { companionName = localStorage.getItem('mintie-name') || ''; } catch {}
-const validName = value => value.length<=40 && /^[\p{L} '.-]+$/u.test(value) && !!value.trim();
-if(!validName(companionName))companionName='';
-function nameForm() {
-  $('emotion-picker').hidePopover();
-  $('name-input').value=companionName;
-  $('name-dialog').showModal();
-  $('name-input').focus();
-}
-$('name-form').addEventListener('submit',event=>{
-  event.preventDefault();
-  const value=$('name-input').value.trim();
-  if(!validName(value)) { $('name-input').setCustomValidity('Letters, spaces, apostrophes, hyphens and periods only.'); $('name-input').reportValidity();return; }
-  if (value !== companionName) end();
-  companionName=value;
-  try {localStorage.setItem('mintie-name',value);} catch {}
-  $('name-dialog').close();
-  startCall();
-  (voiceWanted ? $('end') : $('status')).focus();
-});
-$('name-input').addEventListener('input',()=>$('name-input').setCustomValidity(''));
-$('name-dialog').addEventListener('cancel',event=>{if(!companionName)event.preventDefault();});
-$('edit-name').addEventListener('click',()=>{end();nameForm();});
-if(!companionName)nameForm();
+// Memory lives in this browser only: {name, facts}. The server learns it from the conversation and sends full replacements.
+const memory = createMemory(localStorage);
+const debugPanel = new URLSearchParams(location.search).has('debug') ? (await import('./debug.js')).createDebugPanel({ memory }) : null;
 let voiceState = 'idle', voiceStartedAt = null, firstPartialAt = null, voiceAvailable = false, voiceWanted = false, healthAnswered = false, callSerial = 0;
 let request = null, requestSerial = 0, reactionSerial = 0, run = null, pointer = null, disposed = false;
 let arrivalPending = true, arrivalWave = null;
@@ -53,11 +33,48 @@ const metrics = { selectorMs: null, replyMotionMs: null, commitMotionMs: null, m
 const performer = createPerformer({ now: () => t });
 const trace = createTrace({ audio, performer, touch, pick: (x,y) => character?.pick(x,y) });
 const traced = (type, fn) => data => { if (trace.enabled) trace.textEvent(type, data); return fn(data); };
+// Guard errors (contract 11): the provider-side limits pause voice, never touch or emotes.
+const GUARD = { daily_limit: 'Mintie’s voice is resting until tomorrow — you can still play.', ip_limit: 'Mintie needs a little breather — try again in a minute. You can still play.', human_check: 'Mintie could not confirm you are a person. Reload to try again — you can still play.' };
+const FAILURE = /^(Their (response|voice)|Could not (connect|start)|Audio could not|That was too)/;
+let resting = null, restingTimer;
 const status = value => {
+  if (resting && FAILURE.test(value)) value = GUARD[resting];
   $('status').textContent = value;
-  $('status').classList.toggle('sr-only', !/^(No |Voice |Microphone |Could not |Tap again|Local sounds|Conversation ended)/.test(value));
+  $('status').classList.toggle('sr-only', !/^(No |Voice |Microphone |Could not |Tap again|Local sounds|Conversation ended|Mintie)/.test(value));
 };
+function guardNotice(code) {
+  if (!GUARD[code] || disposed) return;
+  resting = code; clearTimeout(restingTimer);
+  // A daily ceiling stays until reload; a per-IP rate limit clears after a minute.
+  if (code === 'daily_limit') { voiceAvailable = false; reactAvailable = false; }
+  else restingTimer = setTimeout(() => { resting = null; $('controls').dataset.resting = 'false'; debugPanel?.setResting(null); status('Tap Talk to chat.'); }, 60000);
+  $('controls').dataset.resting = 'true';
+  debugPanel?.setResting(code); status(GUARD[code]); showVoiceState();
+}
+// Paid routes need a human-check cookie (hosted demo only; ensureSession is a no-op on local Node). Retry once after human_check.
+// ponytail: one fetch wrapper covers react/say/stt-token without threading a client through audio.js/voice.js; same-origin paths only.
+const nativeFetch = window.fetch.bind(window), PAID = /^\/api\/(react|say|stt-token)$/;
+const errorCode = response => response.clone().json().then(body => body?.error?.code, () => null);
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === 'string' ? input : input.url ?? String(input), location.href);
+  if (url.origin !== location.origin || !PAID.test(url.pathname)) return nativeFetch(input, init);
+  try { await ensureSession(); } catch { guardNotice('human_check'); return Response.json({ error: { stage: 'session', code: 'human_check' } }, { status: 403 }); }
+  let response = await nativeFetch(input, init);
+  if (response.status === 403 && await errorCode(response) === 'human_check') {
+    try { await ensureSession({ force: true }); response = await nativeFetch(input, init); } catch { /* falls through to the notice below */ }
+  }
+  if (!response.ok && [403, 429].includes(response.status)) guardNotice(await errorCode(response));
+  return response;
+};
+const hint = $('hint');
+function hideHint() {
+  if (hint.hidden || hint.dataset.show === 'false') return;
+  hint.dataset.show = 'false'; try { localStorage.setItem('mintie-hint', '1'); } catch {}
+  setTimeout(() => { hint.hidden = true; }, 500);
+}
+let warmed = false;
 function interact() {
+  hideHint(); if (!warmed) { warmed = true; void ensureSession().catch(() => {}); } // Warm the human check on the first gesture, before the first paid call.
   audio.resume().catch(() => status('Tap again to turn on audio.'));
 }
 function showVoiceState() {
@@ -127,7 +144,7 @@ async function react({ emoji, line = null, recipe }, { replyAt = performance.now
   const id = ++reactionSerial;
   clearTimeout(run?.captionTimer); run?.controller.abort(); run?.resolve(null);
   audio.stop();
-  const handle = performer.play(recipe ?? (emoji === 'SPEAK' ? {face:'awe',mouth:'tinyO',body:'perk',loop:'breathe',flower:'perk',buds:'none',anticipationMs:0,durationMs:1200} : emoji), { reflex: source === 'touch' || emoji === 'SPEAK',
+  const handle = performer.play(recipe ?? (emoji === 'SPEAK' ? {face:'awe',mouth:'tinyO',body:'perk',loop:'breathe',buds:'none',anticipationMs:0,durationMs:1200} : emoji), { reflex: source === 'touch' || emoji === 'SPEAK',
     sustainUntil: () => id === reactionSerial && run?.pendingAudio && (candidate ? candidate.voice !== 'none' : !!line) });
   if(emoji==='🦘' && !candidate?.hopApplied)realizerHop({hop:'in_place',emoji:candidate?.emoji??emoji});
   metrics.replyMotionMs = metrics.commitMotionMs = metrics.motionAudioMs = metrics.ttsMs = null;
@@ -177,7 +194,7 @@ async function react({ emoji, line = null, recipe }, { replyAt = performance.now
       if(candidate?.cueReady && result.charTime)void candidate.cueReady.then(cue=>{if(cue && !thisRun.controller.signal.aborted && id===reactionSerial){queueCues(thisRun,cue,line,result);if(cue.timing==='after'&&!thisRun.pendingAudio)thisRun.cues.at(-1).start=audio.atMs(performance.now());}});
       // Use the scheduling conversion, not a second clock sample, for onset metrics.
       thisRun.audioAt = target + (result.startAt - (thisRun.audioWhen ?? when)) * 1000;
-      thisRun.audioStartContext = result.startAt;
+      thisRun.audioStartContext = result.startAt; candidate?.turn?.mark('audio', thisRun.audioAt);
       thisRun.audioTarget = target;
       metrics.motionAudioMs = thisRun.audioAt - motionAt;
       metrics.ttsMs = line ? thisRun.audioAt - audioRequestedAt : null;
@@ -287,7 +304,7 @@ function onPause({ at, detectedAt }) {
   metrics.ackMotionAt = metrics.speechEndToAckMs = null;
   acknowledgement = { local: true, speechEndAt: at, motionAt: null };
 }
-// Listener attends at the speaker's turn start (Kendon 1967); local energy beats Flux StartOfTurn by ~300–500 ms.
+// Listener attends at the speaker's turn start (Kendon 1967); local energy beats the first provider partial by ~300–500 ms.
 function onLocalOnset() { if (!disposed) performer.look('viewer', { durationMs: 1500 }); }
 function onSpeechStart({at=performance.now()}={}) {
   cancelArrival();
@@ -367,7 +384,7 @@ function sendHistory(exclude) {
   return retainedHistory(now,exclude).map(({at,...entry})=>({...entry,agoMs:Math.max(0,Math.round(now-at))}));
 }
 function sceneState() {
-  const self=dynamics.com,view=character?.view,position=view?.position??[0,.53+Math.sin(.1)*4.6,Math.cos(.1)*4.6];
+  const self=dynamics.com,view=character?.view,position=view?.position??[-3.77,2.92,5.39];
   const dx=position[0]-self[0],dz=position[2]-self[2],dy=position[1]-(self[1]+.53),angle=Math.atan2(dx,dz);
   const bearings=['front','front-right','right','back-right','back','back-left','left','front-left'];
   return {viewer:{bearing:bearings[(Math.round(angle/(Math.PI/4))+8)%8],distanceH:Math.hypot(dx,dy,dz),aboveDeg:Math.atan2(dy,Math.hypot(dx,dz))*180/Math.PI},mintie:{x:self[0],z:self[2],state:dynamics.state==='held'?'held':['falling','airborne'].includes(dynamics.state)||self[1]>.01?'airborne':'idle'}};
@@ -379,7 +396,7 @@ function realizerHop({hop,emoji,to=null}) {
 }
 function applyMotion(reply,candidate) {
   received=null;
-  const position=character?.view?.position??[0,.99,4.58],self=dynamics.com;
+  const position=character?.view?.position??[-3.77,2.92,5.39],self=dynamics.com;
   const target=reply.gaze==='touch'?lastTouchTarget:position;
   performer.look?.(reply.gaze,{target,durationMs:2500});
   if(reply.hop==='none')return;
@@ -397,9 +414,9 @@ function onTouch(event, now) {
   for(const k of ['part','durationMs','speed','height','impact','repeat','intensity','path','spin','accel','jerk','release','g','from','to'])if(event[k] !== undefined)compact[k]=event[k];
   const entry = remember(compact);
   if(event.kind === 'contact') {flinchUntil = now + 160; return;}
-  const sfx = {poke:'squish',pat:'boing',pet_flower:'sparkle',lift:'stretch',drop:'plop',throw:'stretch',land:'plop'}[event.kind];
+  const sfx = {poke:'squish',pat:'boing',pet:'sparkle',lift:'stretch',drop:'plop',throw:'stretch',land:'plop'}[event.kind];
   if(sfx) void clipsReady.then(()=>audio.playClip(sfx)).then(result=>result?.done).catch(()=>{});
-  if(reactAvailable && ['poke','pat','pet','pet_flower','lift','throw','shake','hold','drop','land'].includes(event.kind)) pendingTouch = {touch:event,at:now,entry};
+  if(reactAvailable && ['poke','pat','pet','lift','throw','shake','hold','drop','land'].includes(event.kind)) pendingTouch = {touch:event,at:now,entry};
 }
 function pumpTouch(now) {
   if(!pendingTouch || request || speechActive || localTurn || partialText || run?.pendingAudio) return;
@@ -417,7 +434,7 @@ async function listenReaction(now) {
   const timer=setTimeout(()=>controller.abort(),1000);
   try {
     if(trace.enabled)trace.emit('listen_request',{words:count});
-    const response=await fetch('/api/react',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:current,listening:true,localHour:new Date().getHours(),history:sendHistory(),scene:sceneState(),mood:needs.mood(),...(companionName?{name:companionName}:{})}),signal:controller.signal});
+    const response=await fetch('/api/react',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:current,listening:true,localHour:new Date().getHours(),history:sendHistory(),scene:sceneState(),mood:needs.mood(),memory:memory.get()}),signal:controller.signal});
     if(!response.ok)return;
     const reply=await response.json();
     if(controller.signal.aborted || disposed || !speechActive || partialText!==current || audio.speaking() || run?.pendingAudio)return;
@@ -465,9 +482,10 @@ async function streamReaction(candidate, at, speechEndAt) {
   });
   lineReady.catch(()=>{});
   status('One moment…');
+  const turn = candidate.turn = debugPanel?.begin({ kind: candidate.touch ? 'touch' : 'speech', commitAt: candidate.commitAt });
   try {
     if (trace.enabled) trace.emit('react_request', { serial, length: candidate.text?.length ?? 0, touch: candidate.touch?.kind });
-    const response = await fetch('/api/react', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(candidate.touch ? {touch:candidate.touch} : {text:candidate.text}), localHour:new Date().getHours(), history:sendHistory(candidate.entry), ...(companionName?{name:companionName}:{}),scene:sceneState(),mood:needs.mood() }), signal: controller.signal });
+    const response = await fetch('/api/react', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(candidate.touch ? {touch:candidate.touch} : {text:candidate.text}), localHour:new Date().getHours(), history:sendHistory(candidate.entry), memory:memory.get(), ...(debugPanel?{debug:true}:{}), scene:sceneState(), mood:needs.mood() }), signal: controller.signal });
     if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('application/x-ndjson')) throw new Error('selector_http');
     const reader = response.body.getReader(), decoder = new TextDecoder();
     let buffer = '';
@@ -480,11 +498,16 @@ async function streamReaction(candidate, at, speechEndAt) {
         let end;
         while ((end = buffer.indexOf('\n')) !== -1) {
           const reply = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
-          if (trace.enabled) trace.emit('react_frame', { serial, frameType: ['emoji','voice','head','line','cue','error'].find(k => Object.hasOwn(reply, k)) ?? 'unknown', keys: Object.keys(reply), ...(Object.hasOwn(reply, 'emoji') ? { emoji: reply.emoji, gaze: reply.gaze, hop: reply.hop } : {}), ...(Object.hasOwn(reply, 'cue') ? { cue: reply.cue } : {}), ...(['none','sound','words'].includes(reply.voice) ? { voice: reply.voice } : {}) });
+          if (trace.enabled) trace.emit('react_frame', { serial, frameType: ['emoji','voice','head','line','cue','memory','debug','error'].find(k => Object.hasOwn(reply, k)) ?? 'unknown', keys: Object.keys(reply), ...(Object.hasOwn(reply, 'emoji') ? { emoji: reply.emoji, gaze: reply.gaze, hop: reply.hop } : {}), ...(Object.hasOwn(reply, 'cue') ? { cue: reply.cue } : {}), ...(['none','sound','words'].includes(reply.voice) ? { voice: reply.voice } : {}) });
+          // Side-channel frames (contracts 5/6) may arrive anywhere, even after the cue; they never gate the reply.
+          if (Object.keys(reply).length === 1 && (Object.hasOwn(reply, 'memory') || Object.hasOwn(reply, 'debug'))) {
+            if (Object.hasOwn(reply, 'memory')) memory.set(reply.memory); else turn?.set(reply.debug);
+            continue;
+          }
           if (reply.error || finished) throw new Error('selector_stream');
           if (emoji === undefined) {
             if (Object.keys(reply).length !== 3 || !(reply.emoji === null || Object.hasOwn(CATALOG, reply.emoji)) || ![null,'viewer','away','down','up','touch'].includes(reply.gaze) || !['none','in_place','toward_viewer','away_from_viewer','left','right'].includes(reply.hop)) throw new Error('invalid_reply');
-            emoji = candidate.emoji = reply.emoji;
+            emoji = candidate.emoji = reply.emoji; turn?.mark('frame');
             applyMotion(reply,candidate);
             const replyAt = performance.now();
             if (serial !== requestSerial || disposed) return null;
@@ -504,10 +527,10 @@ async function streamReaction(candidate, at, speechEndAt) {
           } else if(!lineReceived && !headReceived && Object.hasOwn(reply,'head')) {
             const head=reply.head;
             if(voiceMode!=='words' || Object.keys(reply).length!==1 || !head || Object.keys(head).length!==2 || typeof head.line!=='string' || !head.line.trim() || head.line.length>600 || /[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}‍︎️⃣]/u.test(head.line) || typeof head.display!=='string' || head.display.length>600 || /[\[\]]/.test(head.display))throw Error('invalid_reply');
-            headReceived=true;finishHead(head);
+            headReceived=true;turn?.mark('head');finishHead(head);
           } else if(!lineReceived) {
             if (Object.keys(reply).length!==3 || !Object.hasOwn(reply,'line') || !Object.hasOwn(reply,'display') || !Number.isFinite(reply.ms) || reply.ms<0 || !(reply.line === null || typeof reply.line === 'string' && reply.line.length <= 600 && !/[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}‍︎️⃣]/u.test(reply.line)) || !(reply.line===null?reply.display===null:typeof reply.display==='string' && reply.display.length<=600 && !/[\[\]]/.test(reply.display)) || voiceMode === 'none' && reply.line !== null || voiceMode === 'sound' && typeof reply.line === 'string' && reply.line.replace(/\[[^\]]*\]/g, '').trim().split(/\s+/).length > 4) throw new Error('invalid_reply');
-            lineReceived = true;lineValue=reply.line;finishHead?.(null);finishLine({line:reply.line,display:reply.display});
+            lineReceived = true;turn?.mark('line');lineValue=reply.line;finishHead?.(null);finishLine({line:reply.line,display:reply.display});
             status(voiceWanted ? 'They are listening. You can interrupt them.' : 'Here is their response.');
           } else {
             if(Object.keys(reply).length!==1 || !Object.hasOwn(reply,'cue') || !validCue(reply.cue,lineValue))throw Error('invalid_reply');
@@ -672,18 +695,23 @@ motionPreference.addEventListener('change', preferenceChanged);
 const canvas = $('character');
 function keyboardTouch(kind) {
   if (!character || pointer !== null) return;
-  cancelArrival(); interact(true);
-  const hit = { region: kind === 'pat' ? 'head' : kind === 'flower' ? 'flower' : 'body', point: [0, kind === 'pat' ? .85 : .5, .3], normal: [0, 0, 1] };
-  const keyRay = y => ({ origin: [0, y, 3], dir: [0, 0, -1] });
+  cancelArrival(); interact();
+  const hit = { region: kind === 'pat' || kind === 'crown' ? 'head' : 'body', point: [0, kind === 'pat' || kind === 'crown' ? .85 : .5, .3], normal: [0, 0, 1] };
+  const keyRay = (y, x = 0) => ({ origin: [x, y, 3], dir: [0, 0, -1] });
   touch.pointerDown(hit, t, keyRay(hit.point[1]));
   if (kind === 'lift') {
     pointer = 'keyboard';
     touch.pointerMove(null, keyRay(hit.point[1] + .8), t);
+  } else if (kind === 'crown') {
+    // A short stroke across the head: the same path a finger takes, so it reads as `pet`, not `pat`.
+    for (const [dx, dt] of [[.08, 40], [-.08, 80], [.08, 120]]) touch.pointerMove({ ...hit, point: [dx, hit.point[1], hit.point[2]] }, keyRay(hit.point[1], dx), t + dt);
+    touch.pointerUp(t + 160);
   } else touch.pointerUp(t);
 }
 canvas.addEventListener('keydown', event => {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
-  const kind = { ' ': 'poke', p: 'pat', f: 'flower', l: 'lift' }[event.key.toLowerCase()];
+  if (event.key === '+' || event.key === '=' || event.key === '-') { event.preventDefault(); character?.dolly?.(event.key === '-' ? 1.18 : .85); return; }
+  const kind = { ' ': 'poke', p: 'pat', c: 'crown', l: 'lift' }[event.key.toLowerCase()];
   if (!kind) return;
   event.preventDefault();
   if (!event.repeat) keyboardTouch(kind);
@@ -696,40 +724,49 @@ document.addEventListener('keydown', event => {
     $('emotion-picker').hidePopover(); $('emotions').focus(); event.preventDefault();
   }
 });
-const cameraPointers = new Map(); let orbiting = false, pinch = 0, lastTouchTarget = null;
-window.addEventListener('pagehide', () => { cameraPointers.clear(); orbiting = false; pinch = 0; });
+// Fixed camera: empty-space drag does nothing, dragging Mintie is touch physics, wheel/pinch zoom, the cursor only steers their gaze.
+const cameraPointers = new Map(); let pinching = false, pinch = 0, lastTouchTarget = null;
+window.addEventListener('pagehide', () => { cameraPointers.clear(); pinching = false; pinch = 0; });
 const pinchDistance = () => { const [a,b] = [...cameraPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
+// Normalized viewport coordinates: (0,0) centre, x right, y up, each in [-1,1] (contract 2).
+const aim = event => character?.setPointer?.(Math.max(-1, Math.min(1, event.clientX / innerWidth * 2 - 1)), Math.max(-1, Math.min(1, 1 - event.clientY / innerHeight * 2)));
+const unaim = () => character?.setPointer?.(null);
+window.addEventListener('pointermove', aim, { passive: true });
+document.documentElement.addEventListener('pointerleave', unaim); window.addEventListener('blur', unaim);
 canvas.addEventListener('pointerdown', event => {
   if (!character || event.button !== 0 || pointer === 'keyboard') return;
   cameraPointers.set(event.pointerId, {x:event.clientX,y:event.clientY}); canvas.setPointerCapture(event.pointerId);
-  if (cameraPointers.size > 1) { if (pointer !== null && !orbiting) touch.pointerUp(t); pointer = null; orbiting = true; pinch = pinchDistance(); return; }
+  if (cameraPointers.size > 1) { if (pointer !== null) touch.pointerUp(t); pointer = null; pinching = true; pinch = pinchDistance(); return; }
   const hit = character.pick(event.clientX, event.clientY);
   if (hit) cancelArrival();
-  interact(Boolean(hit)); pointer = event.pointerId; orbiting = !hit;
+  interact();
   touch.pointerHover?.(null,t);
-  if (hit) {lastTouchTarget=hit.worldPoint??hit.point;touch.pointerDown(hit, t, character.ray(event.clientX, event.clientY));}
+  if (!hit) return;
+  pointer = event.pointerId; lastTouchTarget = hit.worldPoint ?? hit.point;
+  touch.pointerDown(hit, t, character.ray(event.clientX, event.clientY));
 });
 canvas.addEventListener('pointermove', event => {
   if (!character) return;
   if(event.pointerType==='mouse' && !event.buttons && pointer===null) {
     const hit=character.pick(event.clientX,event.clientY);
-    touch.pointerHover?.(hit,t);
+    touch.pointerHover?.(hit,t); canvas.classList.toggle('over', !!hit);
     if(hit)lastTouchTarget=hit.worldPoint??hit.point;
   }
-  const previous = cameraPointers.get(event.pointerId);
-  if (!previous) return;
+  if (!cameraPointers.has(event.pointerId)) return;
   cameraPointers.set(event.pointerId, {x:event.clientX,y:event.clientY});
-  if (cameraPointers.size > 1) { const next = pinchDistance(); if (pinch > 0 && next > 0) character.dolly(pinch/next); pinch = next; return; }
-  if (pointer === event.pointerId) {
-    if (orbiting) character.orbit(event.clientX-previous.x,event.clientY-previous.y);
-    else touch.pointerMove(character.pick(event.clientX,event.clientY),character.ray(event.clientX,event.clientY),t);
-  }
+  if (cameraPointers.size > 1) { const next = pinchDistance(); if (pinching && pinch > 0 && next > 0) character.dolly?.(pinch/next); pinch = next; return; }
+  if (pointer === event.pointerId) touch.pointerMove(character.pick(event.clientX,event.clientY),character.ray(event.clientX,event.clientY),t);
 });
-canvas.addEventListener('wheel', event => { if (!character) return; event.preventDefault(); character.dolly(Math.exp(Math.max(-500,Math.min(500,event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?canvas.clientHeight:1)))*.001)); }, {passive:false});
+canvas.addEventListener('wheel', event => { if (!character) return; event.preventDefault(); character.dolly?.(Math.exp(Math.max(-500,Math.min(500,event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?canvas.clientHeight:1)))*.001)); }, {passive:false});
 $('stage').addEventListener('pointerdown', event => {
   if (event.button === 0 && event.target !== canvas) interact();
 });
-const release = event => { cameraPointers.delete(event.pointerId); if (event.pointerId === pointer) { if (!orbiting) touch.pointerUp(t); pointer = null; } if (cameraPointers.size === 1) { pointer = cameraPointers.keys().next().value; orbiting = true; pinch = 0; } else if (!cameraPointers.size) { orbiting = false; pinch = 0; } };
+const release = event => {
+  cameraPointers.delete(event.pointerId);
+  if (event.pointerId === pointer) { touch.pointerUp(t); pointer = null; }
+  if (cameraPointers.size < 2) { pinching = false; pinch = 0; }
+  if (event.pointerType !== 'mouse') unaim(); // A lifted finger has no cursor to follow.
+};
 canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release); canvas.addEventListener('lostpointercapture', release);
 canvas.addEventListener('pointerleave', () => touch.pointerHover?.(null,t));
 const resize = new ResizeObserver(() => character?.resize()); resize.observe($('stage'));
@@ -749,7 +786,7 @@ function tick(now) {
   if(choice?.kind==='social'){performer.look('viewer');performer.micro('hum-sway');}
   if(choice?.kind==='micro')performer.micro(choice.micro);
   if(choice?.kind==='hop' && !reducedMotion && touch.hop({to:[dyn.com[0]+.4,dyn.com[2]]}))needs.hopped(t);
-  const inputs = { viewer:character.view?.position, self:dyn.com, listening: speechActive || listening, pauseAt, thinking: now < thinkingUntil, talking: speaking, speaking: audio.amplitude(), reducedMotion, needsDrowsy:needs.drowsy() };
+  const inputs = { viewer:character.view?.position, self:dyn.com, attend:character.view?.gaze, listening: speechActive || listening, pauseAt, thinking: now < thinkingUntil, talking: speaking, speaking: audio.amplitude(), reducedMotion, needsDrowsy:needs.drowsy() };
   inputs.received=!!received;inputs.thinking=inputs.thinking&&!received;
   const contextNow=audio.atMs(now);
   inputs.suppressBeats=!!run && !run.controller.signal.aborted && run.cues.some(c=>!c.dropped&&beatsSuppressed(contextNow*1000,c.strokeAt*1000));
@@ -785,7 +822,7 @@ function tick(now) {
   debug.frame.intervalMs = delta;
   debug.frame.jsMs = performance.now() - tickStart;
   debug.frame.count++;
-  if (arrivalPending && debug.frame.count > 1 && !$('name-dialog').open) {
+  if (arrivalPending && debug.frame.count > 1) {
     arrivalPending = false;
     if (!performer.active() && !speechActive && pointer === null) { arrivalWave = performer.play('👋'); remember({who:'mintie',emoji:'👋',said:null}); }
   }
@@ -794,6 +831,8 @@ function tick(now) {
 const debug = window.__mintie = { performer, metrics, audio, trace, frame: { count: 0, intervalMs: 0, jsMs: 0 }, stats: () => character.stats(), history: () => history.map(entry => ({ ...entry })),
   get adapter() { return character?.adapter; },
   pick: (x, y) => character?.pick(x, y)?.region ?? null,
+  get memory() { return memory.get(); },
+  view: () => character?.view,
   get interaction() { return { pointer, voiceWanted, voiceState }; },
   get lastRun() { return run ? { ...run, resolve: undefined, candidate: undefined } : null; },
   get clock() { return { t, scale: 1 }; },
@@ -809,7 +848,7 @@ async function health() {
   try {
     const response = await fetch('/api/health'); if (!response.ok) throw new Error();
     const health = await response.json();
-    reactAvailable = health.react === true;
+    reactAvailable = health.react === true; debugPanel?.setHealth(health);
     voiceAvailable = health.ok === true && health.stt === true && health.react === true && health.say === true;
     if (!voiceWanted) status(voiceAvailable ? 'Tap Talk to chat.' : 'Voice is unavailable. Try their emotions.');
   } catch { if (!voiceWanted) status('Could not reach the server. Try their emotions.'); }
@@ -834,5 +873,7 @@ try {
   void audio.context;
   character = await createCharacter({ canvas });
   character.resize(); lastFrame = performance.now(); frameId = requestAnimationFrame(tick);
-  debug.readyAt = performance.now(); debug.ready = true; await health();
+  debug.readyAt = performance.now(); debug.ready = true;
+  try { if (!localStorage.getItem('mintie-hint')) { hint.hidden = false; hint.dataset.show = 'true'; } } catch {}
+  await health();
 } catch { status('Could not draw Mintie. Reload to try again.'); voiceState = 'error'; showVoiceState(); }

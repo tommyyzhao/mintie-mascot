@@ -20,7 +20,7 @@ async function fixture(t) {
   globalThis.fetch = async () => Response.json({ token: 'synthetic' });
   globalThis.WebSocket = class {
     static OPEN = 1;
-    constructor() { socket = this; this.readyState = 1; this.bufferedAmount = 0; setImmediate(() => this.onmessage({ data: '{"type":"Connected"}' })); }
+    constructor() { socket = this; this.readyState = 1; this.bufferedAmount = 0; setImmediate(() => this.onmessage({ data: '{"message_type":"session_started"}' })); }
     close() {}
     send() {}
   };
@@ -46,7 +46,7 @@ async function fixture(t) {
       for (let i = 0; i < bytes.byteLength / 2; i++) view.setInt16(i * 2, Math.round(32767 * (energy * Math.sin(2 * Math.PI * 220 * i / 16000) + (playing || filler ? .015 : 0) * Math.sin(2 * Math.PI * 440 * i / 16000))), true);
       worklet.port.onmessage({ data: bytes });
     },
-    turn(event, transcript = '', turn_index = 0, extra = {}) { socket.onmessage({ data: JSON.stringify({ type: 'TurnInfo', event, transcript, turn_index, ...extra }) }); },
+    turn(event, transcript = '') { socket.onmessage({ data: JSON.stringify(event === 'EndOfTurn' ? { message_type: 'committed_transcript', text: transcript } : { message_type: 'partial_transcript', text: transcript }) }); },
   };
 }
 
@@ -83,10 +83,9 @@ test('own voice suppressed, delayed final retained, subsequent turn admitted', a
   assert.equal(f.commits.length, 0);
   f.turn('StartOfTurn', 'yes', 1); f.turn('EndOfTurn', 'yes', 1);
   assert.equal(f.commits.length, 1);
-  f.turn('EndOfTurn', 'duplicate', 1); assert.equal(f.commits.length, 1);
 });
 
-test('playback observed without a Flux turn cannot poison a later reply', async t => {
+test('playback observed without a provider turn cannot poison a later reply', async t => {
   const f = await fixture(t); f.at(500); f.playback('I like sunshine and warm summer days', 0, 1000); f.frame();
   f.at(6000); f.playback('I like sunshine and warm summer days', 0, 1000);
   f.turn('StartOfTurn', 'I like sunshine and warm summer days');
@@ -142,7 +141,7 @@ test('local onset recovers promptly after speech stops', async t => {
   if (!baseline) assert.ok(onsetMsAfterSpeech <= 220);
 });
 
-test('post-playback local blocking is measured without blocking Flux admission', async t => {
+test('post-playback local blocking is measured without blocking provider admission', async t => {
   const f = await fixture(t); f.playback('I like sunshine', 0, 200); f.frame(.08, 200);
   f.at(200); f.playback('I like sunshine', 0, 200); f.frame(.08, 20);
   f.turn('StartOfTurn', 'yes'); f.turn('EndOfTurn', 'yes');

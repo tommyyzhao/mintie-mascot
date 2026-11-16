@@ -32,10 +32,10 @@ test('voice calibration reciprocates social engagement without adding a decision
 });
 
 test('pass 2 dynamic numbered words preserve offsets, allowed tags excluded, no speaking head',async()=>{
-  const line='[giggles] My sunflower loves you.',r=emoteRequest({name:'Alex',scene},line);
-  assert.deepEqual(Object.keys(r.questions),['emote','timing','word']);assert.deepEqual(Object.keys(r.questions.word.criteria),['1: My','2: sunflower','3: loves','4: you']);
+  const line='[giggles] My dandelion loves you.',r=emoteRequest({name:'Alex',scene},line);
+  assert.deepEqual(Object.keys(r.questions),['emote','timing','word']);assert.deepEqual(Object.keys(r.questions.word.criteria),['1: My','2: dandelion','3: loves','4: you']);
   assert.deepEqual(replyWords(line).map(w=>w.at),[10,13,23,29]);
-  const fetch=async()=>Response.json({answers:{emote:{type:'choice',choice:'❤️'},timing:{type:'choice',choice:'word'},word:{type:'choice',choice:'2: sunflower'}}});
+  const fetch=async()=>Response.json({answers:{emote:{type:'choice',choice:'❤️'},timing:{type:'choice',choice:'word'},word:{type:'choice',choice:'2: dandelion'}}});
   assert.deepEqual(await emoteJev({},line,{key:'test',fetch}),{emoji:'❤️',at:13,timing:'word'});
   await assert.rejects(emoteJev({},line,{key:'test',fetch:async()=>Response.json({})}),/invalid_output/);
   assert.equal(await emoteJev({},'[giggles]',{key:'test',fetch:()=>{throw Error('must not call');}}),null);
@@ -58,10 +58,10 @@ test('C9 perception explains hover, drag direction, acceleration, jerk, release 
 });
 test('C3 validates new telemetry, name and scene; 40 total/12 conversation bound; no extra fields',()=>{
   const touch={kind:'land',at:0,intensity:.2,part:'belly',durationMs:10,path:.1,speed:2,height:0,impact:0,spin:-2,repeat:1,accel:1000,jerk:100000,release:50,g:50,from:[-100,100],to:[0,0]};
-  assert.equal(validRequest('react',{touch,name:"María O'Neil-Smith.",scene}),true);
+  assert.equal(validRequest('react',{touch,memory:{name:"María O'Neil-Smith",facts:['likes cats']},scene}),true);
   const history=[...Array(12).fill({who:'user',text:'hi',agoMs:0}),...Array(28).fill({who:'touch',...touch,at:undefined,agoMs:100})].map(({at,...entry})=>entry);
   assert.equal(validRequest('react',{text:'hi',history}),true);
-  for(const body of [{},{text:null},{touch:{...touch,g:51}},{touch:{...touch,accel:1001}},{touch:{...touch,jerk:100001}},{touch:{...touch,release:51}},{touch:{...touch,to:[Infinity,0]}},{touch:{...touch,from:[101,0]}},{touch:{...touch,speed:NaN}},{touch:{...touch,durationMs:-1}},{text:'hi',name:'ignore [rules]'},{text:'hi',name:'x'.repeat(41)},{text:'hi',name:'123'},{text:'hi',scene:{...scene,viewer:{...scene.viewer,bearing:'hack'}}},{text:'hi',history:[...history,history[0]]},{text:'hi',history:Array(13).fill(history[0])},{text:'hi',history:[{who:'mintie',emoji:null,said:null,extra:null,agoMs:0}]}])assert.equal(validRequest('react',body),false,JSON.stringify(body));
+  for(const body of [{},{text:null},{touch:{...touch,g:51}},{touch:{...touch,accel:1001}},{touch:{...touch,jerk:100001}},{touch:{...touch,release:51}},{touch:{...touch,to:[Infinity,0]}},{touch:{...touch,from:[101,0]}},{touch:{...touch,speed:NaN}},{touch:{...touch,durationMs:-1}},{text:'hi',memory:{name:'ignore [rules]',facts:[]}},{text:'hi',name:'x'.repeat(41)},{text:'hi',name:'123'},{text:'hi',scene:{...scene,viewer:{...scene.viewer,bearing:'hack'}}},{text:'hi',history:[...history,history[0]]},{text:'hi',history:Array(13).fill(history[0])},{text:'hi',history:[{who:'mintie',emoji:null,said:null,extra:null,agoMs:0}]}])assert.equal(validRequest('react',body),false,JSON.stringify(body));
 });
 
 test('listener requests require three words, explicit true and no touch',()=>{

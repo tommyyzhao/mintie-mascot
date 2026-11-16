@@ -36,7 +36,7 @@ async function fixture(t, options = {}) {
   globalThis.fetch = async () => Response.json({ token: 'fake' });
   globalThis.WebSocket = class {
     static OPEN = 1;
-    constructor(url, protocols) { assert.deepEqual(protocols, ['bearer', 'fake']); socket = this; this.readyState = 1; this.bufferedAmount = 0; setImmediate(() => this.onmessage({ data: '{"type":"Connected"}' })); }
+    constructor(url, protocols) { socket = this; this.readyState = 1; this.bufferedAmount = 0; setImmediate(() => this.onmessage({ data: '{"message_type":"session_started"}' })); }
     close() {}
     send(value) { sent.push(value); }
   };
@@ -49,22 +49,21 @@ async function fixture(t, options = {}) {
     advance(ms) { clock += ms; },
     speaking(value) { speaking = value; }, stops: () => stops, tracksStopped: () => tracksStopped,
     send(message) { socket.onmessage?.({ data: JSON.stringify(message) }); },
-    turn(event, transcript = '', turn_index = 0, extra = {}) { this.send({ type: 'TurnInfo', event, transcript, turn_index, ...extra }); },
+    turn(event, transcript = '') { if (event === 'EndOfTurn') this.send({ message_type: 'committed_transcript', text: transcript }); else if (transcript) this.send({ message_type: 'partial_transcript', text: transcript }); },
     frame(energy, ms = 100) { clock += ms; worklet.port.onmessage?.({ data: frame(energy, ms) }); },
     socket: () => socket,
   };
 }
-test('binary PCM, provider onset/end, timestamp mapping, duplicate and late-turn fencing', async t => {
+test('base64 PCM chunks, first words open a turn, commit closes it; speech end is the last voiced frame', async t => {
   const f = await fixture(t);
   f.frame(.08, 600); f.turn('StartOfTurn', 'hola');
   f.frame(0, 1000); assert.equal(f.ends.length, 0); assert.equal(f.commits.length, 0); assert.equal(f.pauses.length, 1);
-  assert.ok(f.sent.every(x => x instanceof ArrayBuffer));
-  f.turn('EndOfTurn', 'hola', 0, { words: [{ word: 'hola', end: .6 }] });
+  assert.ok(f.sent.every(x => JSON.parse(x).message_type === 'input_audio_chunk' && JSON.parse(x).commit === false));
+  f.turn('EndOfTurn', 'hola');
   assert.equal(f.starts.length, 1); assert.equal(f.ends.length, 1); assert.equal(f.commits.length, 1);
   assert.equal(f.commits[0].speechEndAt, 600); assert.equal(f.commits[0].committedAt, 1600);
-  f.turn('EndOfTurn', 'hola'); f.turn('StartOfTurn', 'stale'); f.turn('Update', 'stale');
-  assert.equal(f.commits.length, 1); assert.equal(f.starts.length, 1);
-  f.turn('StartOfTurn', 'hola', 1); f.turn('EndOfTurn', 'hola', 1);
+  f.turn('EndOfTurn', ''); assert.equal(f.commits.length, 1); assert.equal(f.starts.length, 1); // silence commit opens nothing
+  f.turn('Update', 'hola de nuevo'); f.turn('EndOfTurn', 'hola de nuevo');
   assert.equal(f.commits.length, 2); assert.equal(f.starts.length, 2);
 });
 test('echo onset during playback waits for non-echo words; barge-in stops audio once; echo final consumed', async t => {
@@ -80,7 +79,7 @@ test('delayed echo remains suppressed after playback references expire; admitted
   const f = await fixture(t); f.audio.echoLines = ['hola bonita']; f.speaking(true); f.frame(.08);
   f.turn('StartOfTurn', 'hola bonita'); f.speaking(false); f.audio.echoLines = []; f.advance(5000);
   f.turn('EndOfTurn', 'hola bonita'); assert.equal(f.commits.length, 0);
-  f.turn('StartOfTurn', '', 1); f.turn('EndOfTurn', '', 1);
+  f.turn('Update', 'hola'); f.turn('EndOfTurn', '');
   assert.equal(f.cancels.length, 1); assert.equal(f.ends.length, 0);
 });
 test('pause predating provider onset replays once on admission; capture interruptions update sample clock', async t => {
@@ -89,12 +88,12 @@ test('pause predating provider onset replays once on admission; capture interrup
   f.turn('StartOfTurn', 'hello'); assert.equal(f.pauses.length, 1);
   f.turn('Update', 'hello there'); assert.equal(f.pauses.length, 1);
   f.advance(3000); f.frame(.08, 100); f.frame(0, 300);
-  f.turn('EndOfTurn', 'hello there', 0, { words: [{ end: 1 }] });
+  f.turn('EndOfTurn', 'hello there');
   assert.equal(f.commits[0].speechEndAt, 4000);
 });
 test('fatal provider prose sanitized; owned resources stop; fresh user start reconnects', async t => {
   const f = await fixture(t);
-  f.send({ type: 'FatalError', error: 'private token and transcript', code: 'PRIVATE' });
+  f.send({ message_type: 'quota_exceeded', error: 'private token and transcript' });
   assert.deepEqual(f.errors, [{ stage: 'stt', code: 'provider_error' }]);
   assert.equal(f.tracksStopped(), 1); assert.equal(f.states.at(-1), 'error');
   await f.voice.start(); assert.equal(f.states.at(-1), 'listening');
@@ -103,7 +102,7 @@ test('fatal provider prose sanitized; owned resources stop; fresh user start rec
 });
 test('malformed input and audio backpressure fail closed', async t => {
   const f = await fixture(t); f.send(null); assert.equal(f.errors.at(-1).code, 'invalid_message');
-  await f.voice.start(); f.turn('EndOfTurn', 'hola', -1); assert.equal(f.errors.at(-1).code, 'invalid_message');
+  await f.voice.start(); f.send({ message_type: 'partial_transcript', text: 5 }); assert.equal(f.errors.at(-1).code, 'invalid_message');
   await f.voice.start(); f.socket().bufferedAmount = 64001; f.frame(.08); assert.equal(f.errors.at(-1).code, 'audio_backpressure');
 });
 test('energy VAD onset fires once per turn after 120 ms of voicing, never during TTS', () => {

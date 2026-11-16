@@ -1,5 +1,6 @@
 # Static web/ + three as Workers assets; /api/* runs server/worker.mjs (createApp via node:http).
-# No routes or custom domains on purpose: deploys go to workers.dev only. Set ORIGINS to your deployed origin.
+# No routes or custom domains on purpose: deploys go to workers.dev only. ORIGINS lists every origin allowed to call /api (keep your own workers.dev origin).
+# Secrets (wrangler secret put): OPENROUTER_API_KEY, ELEVENLABS_API_KEY, SYSTEM_ONE_API_KEY, TURNSTILE_SECRET_KEY.
 name = "mintie-mascot"
 main = "server/worker.mjs"
 compatibility_date = "2026-10-01"
@@ -12,7 +13,13 @@ directory = ".cf/assets"
 run_worker_first = ["/api/*"]
 
 [vars]
-ORIGINS = "https://mintie-mascot.example.workers.dev"
+ORIGINS = "https://mintie.sloprefinery.ai,https://mintie-mascot.tzpersonal.workers.dev"
+# Public Turnstile site key (not secret). Create the widget, then paste its sitekey here. Empty = guard on, but /api/health omits turnstile.
+TURNSTILE_SITE_KEY = ""
+# Provider spend caps per UTC day, USD (guard.mjs). Per-IP: dollars and voice sessions.
+DAILY_USD = "5"
+IP_USD = "0.25"
+IP_SESSIONS = "15"
 
 [[durable_objects.bindings]]
 name = "BUDGET"

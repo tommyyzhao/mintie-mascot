@@ -14,7 +14,7 @@ const delta = content => `data: ${JSON.stringify({choices:[{delta:{content},fini
 const end = 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
 const sse = text => new Response(delta(text) + end);
 const headText = '[giggles] Three little birds.';
-const fullText = headText + ' They found a sunflower. 🌻';
+const fullText = headText + ' They found a dandelion. 🌼';
 const choice = value => ({ type:'choice', choice:value });
 
 // No socket/provider calls: exercise the complete route with in-memory HTTP streams.
@@ -54,7 +54,7 @@ test('stream head detects first complete ≥3-word sentence, strips emojis, pres
     assert.deepEqual(head,{line:`[happy hum] Three little birds${punctuation}`,display:`Three little birds${punctuation}`});
     assert.ok(proseResult(raw,{voice:'words'}).line.startsWith(head.line));
   }
-  for(const raw of ['Just two.','Three little birds.','Three little birds. 🌻','Three little birds. [giggles]','Hi! Three little birds.','Two words. Then more.'])assert.equal(streamHead(raw),null,raw);
+  for(const raw of ['Just two.','Three little birds.','Three little birds. 🌼','Three little birds. [giggles]','Hi! Three little birds.','Two words. Then more.'])assert.equal(streamHead(raw),null,raw);
   for(const raw of ['Three little birds https://bad.test. Next sentence.','Three little birds router-secret. More words.'])assert.equal(streamHead(raw,[],['router-secret']),null);
   // Invented stage directions are dropped (2f424d1), never spoken; the head stays a prefix of the final line.
   assert.deepEqual(streamHead('Three little birds [unknown]. More words.'),{line:'Three little birds.',display:'Three little birds.'});
@@ -62,7 +62,7 @@ test('stream head detects first complete ≥3-word sentence, strips emojis, pres
 });
 
 test('stream clause waits until ~120 characters and a following word; brackets/decimals never split', () => {
-  const phrase='These tiny birds gathered every yellow petal they could find beside the winding river to build their magnificent sunflower palace';
+  const phrase='These tiny birds gathered every yellow acorn they could find beside the winding river to build their magnificent dandelion palace';
   for(const punctuation of [',',';',':']) {
     const head=streamHead(`${phrase}${punctuation} then celebrated. They sang.`);
     assert.equal(head.line,phrase+punctuation);
@@ -101,9 +101,9 @@ test('buffered head never precedes pass 1 and is suppressed for sound/none', asy
 });
 
 test('emitted head is never rewritten by the anti-repeat retry: no extra call, final keeps the spoken prefix', async () => {
-  const initial='Three little birds. They found a sunflower.', replacement='A tiny cloud adopted them.';
+  const initial='Three little birds. They found a dandelion.', replacement='A tiny cloud adopted them.';
   const f=route(provider(initial,{retry:replacement}));
-  await f.request({text:'Story please',history:[{who:'mintie',emoji:null,said:'They found a sunflower.',agoMs:4000}]});
+  await f.request({text:'Story please',history:[{who:'mintie',emoji:null,said:'They found a dandelion.',agoMs:4000}]});
   assert.equal(f.frames[2].head.line,'Three little birds.');
   assert.equal(f.frames[3].line,initial);
   assert.equal(f.logs.find(x=>x.stage==='stream-final').prefix,true);
@@ -174,7 +174,7 @@ test('main parser admits head after words; cancellation settles blocked head', a
   async function fixture() {
     const frames=[],sounds=[],head=deferred(),line=deferred();let wire;
     const context=vm.createContext({cancelArrival(){},CATALOG,needs:{event(){},mood:()=>({})},speakCascade,trace:{enabled:false},performance:{now:()=>1000},AbortController,DOMException,TextDecoder,setTimeout,clearTimeout,
-      disposed:false,reactionSerial:0,requestSerial:0,run:null,request:null,listening:true,metrics:{},history:[],voiceWanted:true,companionName:'Alex',thinkingUntil:0,received:null,t:1000,
+      disposed:false,reactionSerial:0,requestSerial:0,run:null,request:null,listening:true,metrics:{},history:[],voiceWanted:true,memory:{get:()=>({name:null,facts:[]}),set(){}},debugPanel:null,thinkingUntil:0,received:null,t:1000,
       audio:{stop(){},atMs:ms=>ms/1000,say(text,options){sounds.push({text,options});return Promise.resolve({startAt:1.2,endAt:Promise.resolve(3),done:new Promise(()=>{}),charTime:offset=>Promise.resolve(offset)});}},
       performer:{play:()=>({id:1,anticipationMs:180}),active:()=>null,cancel(){}},queueBlinks(){},announce(){},said(){},status(){},audioError(){},fallback(){throw Error('unexpected fallback');},applyMotion(){},sceneState:()=>({}),sendHistory:()=>[],remember:x=>x,
       fetch:async()=>new Response(new ReadableStream({start(c){wire=c;}}),{headers:{'content-type':'application/x-ndjson'}}),

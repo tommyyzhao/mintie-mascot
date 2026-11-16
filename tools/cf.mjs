@@ -8,7 +8,7 @@ let envFile;
 if (args[0] === '--env-file') { args.shift(); envFile = args.shift(); if (!envFile) throw Error('--env-file requires a path'); }
 const [mode, ...rest] = args;
 if (!['api', 'wrangler', 'secrets'].includes(mode) || (mode === 'api' && (rest.length < 2 || rest.length > 3)) || (mode === 'wrangler' && !rest.length) || (mode === 'secrets' && rest.length)) throw Error('Invalid mode or arguments');
-const names = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_ACCOUNT_ID', 'OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'DEEPGRAM_API_KEY', 'TYPESAFE_API_KEY'];
+const names = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_ACCOUNT_ID', 'OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'SYSTEM_ONE_API_KEY', 'TYPESAFE_API_KEY'];
 const keys = { ...(envFile ? await loadKeys(envFile, names) : {}), ...Object.fromEntries(names.filter(k => process.env[k]).map(k => [k, process.env[k]])) };
 const token = keys.CLOUDFLARE_API_TOKEN || keys.CLOUDFLARE_API_KEY;
 if (!token || !keys.CLOUDFLARE_ACCOUNT_ID) throw Error('CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID required');

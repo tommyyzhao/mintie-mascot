@@ -13,8 +13,8 @@ const contract = events => { for (const e of events) {
   assert.deepEqual(Object.keys(e).filter(k=>!optional.includes(k)).sort(), ['kind','at','intensity','part','durationMs','path','speed','height','impact','spin','repeat'].sort());
   for(const [key,max] of [['accel',1000],['jerk',100000],['release',50],['g',50]]) if(key in e) assert.ok(Number.isFinite(e[key])&&e[key]>=0&&e[key]<=max,key);
   for(const key of ['from','to']) if(key in e) { assert.equal(e[key].length,2);assert.ok(e[key].every(v=>Number.isFinite(v)&&Math.abs(v)<=100)); }
-  assert.ok(['contact','poke','pat','pet','pet_flower','hold','lift','shake','drop','throw','land'].includes(e.kind));
-  assert.ok(['crown','forehead','eyeL','eyeR','cheekL','cheekR','mouth','belly','sideL','sideR','back','base','flower'].includes(e.part));
+  assert.ok(['contact','poke','pat','pet','hold','lift','shake','drop','throw','land'].includes(e.kind));
+  assert.ok(['crown','forehead','eyeL','eyeR','cheekL','cheekR','mouth','belly','sideL','sideR','back','base'].includes(e.part));
   for (const [key, value] of Object.entries(e)) if (!['kind','part','from','to'].includes(key)) { assert.ok(Number.isFinite(value), key); near(value * 100, Math.round(value * 100), .00001); }
   assert.ok(e.intensity >= 0 && e.intensity <= 4); assert.ok(e.repeat >= 1);
   if (e.kind !== 'land') assert.equal(e.impact, 0);
@@ -38,7 +38,7 @@ test('cancelHop is a no-op during manual movement', () => {
 });
 
 test('contact flinches immediately, tap reacts on release; dents persist then decay', () => {
-  for (const [region, kind] of [['body','poke'], ['head','pat'], ['flower','pet_flower']]) {
+  for (const [region, kind] of [['body','poke'], ['head','pat']]) {
     const d = createTouch(); d.step(0); d.pointerDown(hit(region), 1);
     assert.deepEqual(kinds(d), ['contact']);
     tick(d, 17, 200);
@@ -47,16 +47,6 @@ test('contact flinches immediately, tap reacts on release; dents persist then de
     assert.equal(events[0].durationMs, 219);
     tick(d, 234, 2200); assert.ok(d.step(2217).dents.every(v => v.depth < .0008));
   }
-});
-
-test('flower flick appears on the first frame and respects reduced motion', () => {
-  const motion = reduced => {
-    const d = createTouch(); d.setReducedMotion(reduced); d.step(0); d.pointerDown(hit('flower'), 1);
-    return Math.hypot(...d.step(16).flower.swing);
-  };
-  const normal = motion(false), reduced = motion(true);
-  assert.ok(normal >= .04 && normal < .06);
-  assert.ok(reduced > 0 && reduced < normal / 2);
 });
 
 test('every press emits contact; stationary hold fires once at 700ms', () => {
@@ -94,15 +84,16 @@ test('drag plane passes through live world hit, camera-facing at fixed depth, re
   near(fallback.step(4217).com[0], before[0]+.4);
 });
 
-test('head strokes pet at most once per 1.5s; leaving the head or rising lifts; flower tap/stroke/lift', () => {
+test('head strokes pet at most once per 1.5s; leaving the head or rising lifts; stroking the crown pets on crown', () => {
   const d = createTouch(); d.step(0); const head=hit('head',[0,.85,.2]); d.pointerDown(head,1,ray(0,.85));
   for (const [x,t] of [[.1,100],[.2,300],[-.1,900],[.1,1600],[.2,1700]]) d.pointerMove(head,ray(x,.85),t);
   const events=d.events(); assert.deepEqual(events.map(e=>e.kind),['contact','pet','pet']); assert.equal(events[2].at-events[1].at,1500); contract(events);
   d.pointerMove(null,ray(1,.85),1800); assert.deepEqual(kinds(d),['lift']); d.pointerUp(1850); assert.equal(d.events()[0].kind,'throw');
-  const f=createTouch(); f.step(0); const flower=hit('flower',[-.28,.86,.2]); f.pointerDown(flower,1,ray(0,.86)); f.pointerMove(flower,ray(.1,.86),100); f.pointerUp(120);
-  assert.deepEqual(kinds(f),['contact','pet_flower']);
-  f.pointerDown(flower,200,ray(0,.86));f.pointerMove(null,ray(0,1.2),300);assert.deepEqual(kinds(f),['contact','lift']);
-  f.pointerUp(600);assert.deepEqual(kinds(f),['drop']);
+  assert.equal(events[1].part,'crown');
+  const f=createTouch(); f.step(0); const top=hit('head',[-.28,.86,.2]); f.pointerDown(top,1,ray(0,.86)); f.pointerMove(top,ray(.1,.86),100); f.pointerUp(120);
+  assert.deepEqual(kinds(f),['contact','pet']);
+  f.pointerDown(top,2000,ray(0,.86));f.pointerMove(null,ray(0,1.2),2100);assert.deepEqual(kinds(f),['contact','lift']);
+  f.pointerUp(2400);assert.deepEqual(kinds(f),['drop']);
 });
 
 test('back-and-forth head pet survives crossing its anchor; moving dent, shear, squash and long lean follow the hand', () => {
@@ -114,7 +105,7 @@ test('back-and-forth head pet survives crossing its anchor; moving dent, shear, 
   tick(d,1800,2000);const out=d.step(2010);assert.ok(out.dents[0].depth>.025);near(out.dents[0].p[0],.18,.001);
   assert.ok(out.shear[0]>.02);assert.ok(out.squash>.025&&out.squash<.05);assert.ok(out.tilt[0]>.03);
   const events=d.events();assert.deepEqual(events.map(e=>e.kind),['contact','pet','pet']);contract(events);
-  assert.equal(events[1].part,'forehead');assert.equal(events[1].durationMs,99);assert.equal(events[1].path,.1);near(events[1].speed,1.01,.01);
+  assert.equal(events[1].part,'crown');assert.equal(events[1].durationMs,99);assert.equal(events[1].path,.1);near(events[1].speed,1.01,.01);
   assert.equal(events[2].durationMs,1699);assert.equal(events[2].path,.54);assert.equal(events[2].at-events[1].at,1600);
   d.pointerUp(2020);assert.deepEqual(d.events(),[]);tick(d,2034,3600);assert.ok(d.step(3617).dents.every(v=>v.depth<.001));
 });
@@ -126,31 +117,16 @@ test('soft-surface pick gaps tolerate <100ms and <.06H, but leaving the silhouet
   assert.deepEqual(kinds(d),['contact','pet','lift']);
 });
 
-test('surface arcs and head/flower boundaries stay pets; upward pull, silhouette exit, body drag and hold-then-move lift', () => {
-  const head=hit('head',[0,.86,.25]),flower=hit('flower',[-.2,.86,.25]);
+test('surface arcs and sweeps across the crown stay pets; upward pull, silhouette exit, body drag and hold-then-move lift', () => {
+  const head=hit('head',[0,.86,.25]),crown=hit('head',[-.2,.86,.25]);
   const d=createTouch();d.step(0);d.pointerDown(head,1,ray(0,.86));
   d.pointerMove(head,ray(.16,.96),200);tick(d,17,250);assert.equal(d.step(267).state,'pet');
-  d.pointerMove(flower,ray(.18,.96),300);tick(d,284,350);assert.equal(d.step(367).state,'pet');
-  assert.deepEqual(kinds(d),['contact','pet','pet_flower']);
+  d.pointerMove(crown,ray(.18,.96),300);tick(d,284,350);assert.equal(d.step(367).state,'pet');
+  assert.deepEqual(kinds(d),['contact','pet']);
   for(const [start,next,x,y,wait]of [[head,head,0,1.02,100],[head,null,.1,.86,100],[hit(),hit(),.08,.5,100],[head,head,.08,.86,800]]){
     const c=createTouch();c.step(0);c.pointerDown(start,1,ray(0,start.point[1]));tick(c,17,wait-17);c.pointerMove(next,ray(x,y),wait);tick(c,wait+17,wait+100);
     assert.equal(c.step(wait+117).state,'held');const events=kinds(c);assert.ok(events.includes('lift'));assert.ok(!events.includes('pet'));
   }
-});
-
-test('flower stroke swings across flower/head boundary; nearby crown pets sway flower; telemetry throttles', () => {
-  const d=createTouch();d.step(0);const flower=hit('flower',[-.2,.86,.25]),head=hit('head',[-.1,.86,.25]);d.pointerDown(flower,1,ray(-.2,.86));
-  for(const[x,t]of [[-.14,100],[-.2,300],[-.12,1700]]){d.pointerMove(head,ray(x,.86),t);tick(d,t,t+100);assert.equal(d.step(t+117).state,'pet');}
-  assert.ok(d.step(1834).flower.swing.some(v=>Math.abs(v)>.01));const events=d.events();assert.deepEqual(events.map(e=>e.kind),['contact','pet_flower','pet_flower']);
-  assert.equal(events[1].part,'flower');assert.equal(events[1].durationMs,99);assert.equal(events[1].path,.06);near(events[1].speed,.61,.01);assert.equal(events[2].path,.2);contract(events);
-  const c=createTouch();c.step(0);c.pointerDown(head,1,ray(-.1,.86));tick(c,17,180);c.pointerMove({...head,worldPoint:[-.05,.86,.25],anchors:{flower:{position:[-.2,.86,.25]}}},ray(-.05,.86),200);tick(c,200,280);
-  assert.ok(c.step(297).flower.swing.some(v=>Math.abs(v)>.005));
-});
-
-test('flower taps share the stroke throttle across presses', () => {
-  const d=createTouch(),flower=hit('flower');d.step(0);
-  for(const t of [1,200,1600]){d.pointerDown(flower,t);d.pointerUp(t+50);}
-  const events=d.events().filter(e=>e.kind==='pet_flower');assert.equal(events.length,2);assert.equal(events[1].at-events[0].at,1599);contract(events);
 });
 
 test('throw preserves linear/angular momentum, bounces, self-rights; shake requires reversals', () => {
@@ -163,7 +139,7 @@ test('throw preserves linear/angular momentum, bounces, self-rights; shake requi
 });
 
 test('nearest live anchors classify moved face; geometry labels are viewer-left/right', () => {
-  const anchors=Object.fromEntries(['eyeL','eyeR','mouth','cheekL','cheekR','flower','crown'].map((key,i)=>[key,{position:[i*2,1,1]}]));
+  const anchors=Object.fromEntries(['eyeL','eyeR','mouth','cheekL','cheekR','crown'].map((key,i)=>[key,{position:[i*2,1,1]}]));
   const d=createTouch();let t=0;
   for (const [key,a] of Object.entries(anchors)) { d.pointerDown({...hit(),worldPoint:[a.position[0]+.02,1,1],anchors},t++);d.pointerUp(t++);assert.equal(d.events()[0].part,key); }
   for(const [point,part] of [[[0,.1,.3],'base'],[[0,.5,-.4],'back'],[[-.5,.4,.2],'sideL'],[[.5,.4,.2],'sideR'],[[0,.8,.2],'forehead'],[[0,.4,.4],'belly']]){
@@ -186,8 +162,8 @@ test('10k seeded pointer events remain finite, generous bounds; malformed input 
   const d=createTouch();let seed=1234567,t=0;const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/2**32);
   for(let i=0;i<10000;i++){
     t+=random()*20;const p=[random()-.5,random(),random()-.5];
-    if(i%3===0)d.pointerDown(hit(['body','head','flower'][i%3],p),t,ray(p[0],p[1]));else if(i%3===1)d.pointerMove(null,ray((random()-.5)*20,random()*8),t);else d.pointerUp(t);
-    const out=d.step(t),numbers=[...out.com,out.squash,...out.shear,...out.tilt,out.stretch,...out.flower.swing,...out.dents.map(x=>x.depth)];
+    if(i%3===0)d.pointerDown(hit(['body','head'][i%2],p),t,ray(p[0],p[1]));else if(i%3===1)d.pointerMove(null,ray((random()-.5)*20,random()*8),t);else d.pointerUp(t);
+    const out=d.step(t),numbers=[...out.com,out.squash,...out.shear,...out.tilt,out.stretch,...out.dents.map(x=>x.depth)];
     assert.ok(numbers.every(Number.isFinite));assert.ok(out.com[1]>=0&&out.com[1]<=4);assert.ok(Math.abs(out.com[0])<=6&&Math.abs(out.com[2])<=6);assert.ok(Math.abs(out.squash)<=.5);assert.ok(out.stretch>=0&&out.stretch<=1);assert.ok(out.dents.length<=4);contract(d.events());
   }
   const bad=createTouch();bad.pointerDown(hit('body',[NaN,1,0]),1);bad.pointerDown({...hit(),normal:[0,0,0]},2);bad.pointerDown(hit(),NaN);assert.deepEqual(bad.events(),[]);
@@ -226,10 +202,10 @@ test('hover emits only head episodes, at 250ms then 1.5s, no press overlap', () 
   const d=createTouch();d.step(0);
   for(const p of [[0,.4,.4],[.4,.4,.2],[0,.5,-.4]]){d.pointerHover(hit('body',p),1);d.pointerHover(null,400);assert.deepEqual(d.events(),[]);}
   d.pointerHover(hit('head',[0,.85,.25]),500);d.pointerHover(null,700);assert.deepEqual(d.events(),[]);
-  d.pointerHover(hit('head',[0,.85,.25]),800);tick(d,801,1100);const first=d.events();assert.equal(first.length,1);assert.equal(first[0].kind,'hover');assert.equal(first[0].part,'forehead');assert.ok(first[0].durationMs>=250);
+  d.pointerHover(hit('head',[0,.85,.25]),800);tick(d,801,1100);const first=d.events();assert.equal(first.length,1);assert.equal(first[0].kind,'hover');assert.equal(first[0].part,'crown');assert.ok(first[0].durationMs>=250);
   d.pointerHover(hit('head',[.1,.85,.25]),1200);tick(d,1201,2800);const more=d.events();assert.equal(more.length,1);assert.ok(more[0].path>0&&more[0].speed>0);assert.ok(more[0].at-first[0].at>=1500);
   d.pointerHover(null,2810);d.events();tick(d,2817,5000);assert.deepEqual(d.events(),[]);
-  for(const part of ['eyeL','eyeR','crown','flower']){const h={...hit('body',[0,.5,.4]),worldPoint:[0,1,0],anchors:{[part]:{position:[0,1,0]}}};d.pointerHover(h,5100);d.pointerHover(null,5400);const e=d.events();assert.equal(e.length,1);assert.equal(e[0].part,part);}
+  for(const part of ['eyeL','eyeR','crown']){const h={...hit('body',[0,.5,.4]),worldPoint:[0,1,0],anchors:{[part]:{position:[0,1,0]}}};d.pointerHover(h,5100);d.pointerHover(null,5400);const e=d.events();assert.equal(e.length,1);assert.equal(e[0].part,part);}
   d.pointerDown(hit('head',[0,.85,.25]),5500);d.events();d.pointerHover(hit('head',[0,.85,.25]),5800);assert.deepEqual(d.events(),[]);
 });
 

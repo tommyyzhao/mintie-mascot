@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pcm16, downsample, createDownsampler } from '../web/audio-worklet.js';
 import { scheduleChunk, decodePCM16 } from '../web/audio.js';
-import { createVoice, fuzzyEchoMatch, normalizeText, fluxUrl } from '../web/voice.js';
+import { createVoice, fuzzyEchoMatch, normalizeText, scribeUrl, scribeChunk } from '../web/voice.js';
 
 const sine = (hz, seconds = 1, rate = 48000) => Float32Array.from({ length: rate * seconds }, (_, i) => Math.sin(2 * Math.PI * hz * i / rate));
 const rms = samples => Math.sqrt(samples.reduce((sum, value) => sum + value ** 2, 0) / samples.length);
@@ -66,16 +66,22 @@ test('echo guard requires ordered prefix evidence, not word containment', () => 
   assert.ok(!fuzzyEchoMatch('hola', ''));
 });
 
-test('Flux query selects multilingual v2 PCM; token stays out of URL', () => {
-  const url = new URL(fluxUrl());
-  assert.equal(url.origin, 'wss://api.deepgram.com');
-  assert.equal(url.pathname, '/v2/listen');
-  assert.equal(url.searchParams.get('model'), 'flux-general-multi');
-  assert.equal(url.searchParams.get('encoding'), 'linear16');
-  assert.equal(url.searchParams.get('sample_rate'), '16000');
-  assert.deepEqual(url.searchParams.getAll('language_hint'), ['en', 'es', 'ru']);
-  assert.equal(url.searchParams.get('eot_threshold'), '0.5');
-  assert.ok(!url.searchParams.has('token'));
+test('Scribe URL: v3 Live, 16 kHz PCM, turn prediction, no language pin; token is the only secret', () => {
+  const url = new URL(scribeUrl({ token: 'sutkn_abc' }));
+  assert.equal(url.origin, 'wss://api.elevenlabs.io');
+  assert.equal(url.pathname, '/v1/speech-to-text/realtime');
+  assert.equal(url.searchParams.get('model_id'), 'scribe_v3_live');
+  assert.equal(url.searchParams.get('audio_format'), 'pcm_16000');
+  assert.equal(url.searchParams.get('commit_strategy'), 'turn_prediction');
+  assert.equal(url.searchParams.get('token'), 'sutkn_abc');
+  for (const pinned of ['language_code', 'secondary_languages', 'language_hint']) assert.ok(!url.searchParams.has(pinned), pinned);
+  assert.ok(!new URL(scribeUrl()).searchParams.has('token'));
+  assert.equal(new URL(scribeUrl({ model: 'scribe_v3_live', silenceSecs: 2 })).searchParams.get('vad_silence_threshold_secs'), '2');
+});
+
+test('mic frame becomes an input_audio_chunk JSON message with base64 PCM', () => {
+  const bytes = Uint8Array.from([1, 2, 3, 4]).buffer;
+  assert.deepEqual(JSON.parse(scribeChunk(bytes)), { message_type: 'input_audio_chunk', audio_base_64: 'AQIDBA==', commit: false, sample_rate: 16000 });
 });
 
 test('voice drops echoes and repeated partials before barge-in; new words stop audio, commit resets turn', async t => {
@@ -92,7 +98,7 @@ test('voice drops echoes and repeated partials before barge-in; new words stop a
   globalThis.fetch = async () => new Response(JSON.stringify({ token: 'fake' }), { headers: { 'content-type': 'application/json' } });
   globalThis.WebSocket = class {
     static OPEN = 1;
-    constructor(url, protocols) { assert.deepEqual(protocols, ['bearer', 'fake']); socket = this; setImmediate(() => this.onmessage({ data: '{"type":"Connected"}' })); }
+    constructor(url, protocols) { assert.equal(protocols, undefined); assert.equal(new URL(url).searchParams.get('token'), 'fake'); socket = this; setImmediate(() => this.onmessage({ data: '{"message_type":"session_started"}' })); }
     close() {}
   };
   globalThis.AudioWorkletNode = class { constructor() { Object.assign(this, connectable(), { port: { close() {} } }); } };
@@ -100,21 +106,22 @@ test('voice drops echoes and repeated partials before barge-in; new words stop a
   const voice = createVoice({ audio, onPartial: value => partials.push(value.text), onCommit: value => commits.push(value.text) });
   t.after(() => voice.stop());
   await voice.start();
-  let turn = 0;
-  const send = (text, event = 'Update', index = turn) => socket.onmessage({ data: JSON.stringify({ type: 'TurnInfo', event, transcript: text, turn_index: index }) });
-  send('hola bonita'); assert.equal(stops, 0); assert.equal(partials.length, 0);
-  send('saluda con la mano', 'StartOfTurn'); assert.equal(stops, 1); assert.equal(partials.length, 1);
-  send('¡Salúda con la mano!'); assert.equal(stops, 1); assert.equal(partials.length, 1);
-  send('saluda con la mano ahora'); assert.equal(stops, 1); assert.equal(partials.length, 2);
-  send('saluda con la mano ahora', 'EndOfTurn'); assert.equal(commits.length, 1);
-  send('saluda con la mano ahora', 'EndOfTurn'); send('late partial'); assert.equal(commits.length, 1); assert.equal(partials.length, 2);
-  turn++; send('saluda con la mano ahora'); assert.equal(stops, 2); assert.equal(partials.length, 3);
-  send('saluda con la mano ahora', 'EndOfTurn');
-  turn++; audio.currentLine = ''; audio.echoLines = ['hola bonita', 'mi flor es un girasol'];
-  send('mi flor es un girasol'); send('mi flor es un girasol', 'EndOfTurn');
+  const partial = text => socket.onmessage({ data: JSON.stringify({ message_type: 'partial_transcript', text, turn_probability: 0.1 }) });
+  const commit = text => socket.onmessage({ data: JSON.stringify({ message_type: 'committed_transcript', text }) });
+  partial('hola bonita'); assert.equal(stops, 0); assert.equal(partials.length, 0);
+  partial('saluda con la mano'); assert.equal(stops, 1); assert.equal(partials.length, 1);
+  partial('¡Salúda con la mano!'); assert.equal(stops, 1); assert.equal(partials.length, 1);
+  partial('saluda con la mano ahora'); assert.equal(stops, 1); assert.equal(partials.length, 2);
+  partial(''); assert.equal(partials.length, 2, 'empty partial is a keepalive');
+  commit('saluda con la mano ahora'); assert.equal(commits.length, 1);
+  partial('saluda con la mano ahora'); assert.equal(stops, 2); assert.equal(partials.length, 3);
+  commit('saluda con la mano ahora'); assert.equal(commits.length, 2);
+  audio.currentLine = ''; audio.echoLines = ['hola bonita', 'mi perro es un girasol'];
+  partial('mi perro es un girasol'); commit('mi perro es un girasol');
   assert.equal(commits.length, 2); assert.equal(partials.length, 3); assert.equal(stops, 2);
-  audio.echoLines = []; turn++;
-  send('mi flor es un girasol', 'EndOfTurn'); assert.equal(commits.length, 3);
+  audio.echoLines = [];
+  commit('mi perro es un girasol'); assert.equal(commits.length, 3);
+  commit(''); assert.equal(commits.length, 3, 'silence commit opens no turn');
 });
 test('gesture requests one microphone immediately; input gate blocks input/turns; late permission cannot resurrect stopped calls', async t => {
   const keys=['navigator','WebSocket','AudioWorkletNode','fetch'];
@@ -126,14 +133,14 @@ test('gesture requests one microphone immediately; input gate blocks input/turns
   const connectable=()=>({connect(){return this;},disconnect(){}});
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{userActivation:{get isActive(){return gesture;}},mediaDevices:{getUserMedia(){assert.equal(gesture,true);mic++;return media.promise;}}}});
   globalThis.fetch=async()=>{tokens++;return new Response(JSON.stringify({token:'fake'}));};
-  globalThis.WebSocket=class{static OPEN=1;constructor(){socket=this;this.readyState=1;setImmediate(()=>this.onmessage?.({data:'{"type":"Connected"}'}));}send(){throw Error('no PCM expected');}close(){}};
+  globalThis.WebSocket=class{static OPEN=1;constructor(){socket=this;this.readyState=1;setImmediate(()=>this.onmessage?.({data:'{"message_type":"session_started"}'}));}send(){throw Error('no PCM expected');}close(){}};
   globalThis.AudioWorkletNode=class{constructor(){Object.assign(this,connectable(),{port:{close(){}}});}};
   const states=[];
   const audio={resume:async()=>{},speaking:()=>false,context:{audioWorklet:{addModule:async()=>{}},createMediaStreamSource(){sources++;return connectable();},destination:{}}};
   const voice=createVoice({audio,onState:s=>states.push(s),onCommit(){commits++;}});t.after(()=>voice.stop());
   const gate=deferred(),stream={getTracks:()=>[{stop(){stops++;}}]};
   const started=voice.start({inputReady:gate.promise});assert.equal(mic,1);gesture=false;media.resolve(stream);await flush();await flush();
-  assert.equal(sources,0);socket.onmessage({data:JSON.stringify({type:'TurnInfo',event:'EndOfTurn',transcript:'interrupt gate',turn_index:0})});assert.equal(commits,0);
+  assert.equal(sources,0);socket.onmessage({data:JSON.stringify({message_type:'committed_transcript',text:'interrupt gate'})});assert.equal(commits,0);
   gate.resolve();await started;assert.equal(sources,1);assert.equal(states.filter(s=>s==='listening').length,1);
   const retry=deferred();voice.start({inputReady:retry.promise});assert.equal(mic,1);assert.equal(tokens,1);retry.resolve();await flush();assert.equal(sources,1);
   voice.stop();assert.equal(stops,1);
@@ -141,9 +148,4 @@ test('gesture requests one microphone immediately; input gate blocks input/turns
   media=deferred();gesture=true;const later=deferred(),waiting=voice.start({inputReady:later.promise});media.resolve(stream);await flush();await flush();voice.stop();later.resolve();await waiting;await flush();assert.equal(sources,1);assert.equal(states.at(-1),'idle');
   media=deferred();gesture=true;globalThis.fetch=async()=>new Response('{}',{status:503});const failed=voice.start();await failed;assert.equal(states.at(-1),'error');const before=stops;media.resolve(stream);await flush();assert.equal(stops,before+1);assert.equal(sources,1);assert.equal(states.at(-1),'error');
   globalThis.navigator.mediaDevices.getUserMedia=()=>{throw new DOMException('denied','NotAllowedError');};await assert.rejects(voice.start(),{name:'NotAllowedError'});assert.equal(states.at(-1),'error');
-});
-
-test('fluxUrl eot option; default stays 0.7', () => {
-  assert.equal(new URL(fluxUrl()).searchParams.get('eot_threshold'), '0.5');
-  assert.equal(new URL(fluxUrl({ eot: 0.5 })).searchParams.get('eot_threshold'), '0.5');
 });

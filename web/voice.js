@@ -22,13 +22,15 @@ export function fuzzyEchoMatch(partial, line) {
 }
 
 // Local energy only earns its keep for the 250 ms backchannel nod (C5).
-// Flux owns onset/end admission; energy never commits a transcript.
+// The provider's turn prediction owns admission and end of turn; energy never commits a transcript.
 export function createEnergyVAD({ onPause = () => {}, onOnset = () => {}, onBlocked = () => {}, pauseMs = 250 } = {}) {
   const noise = [];
-  let floor = .003, warmup = 0, voiced = 0, silence = 0, active = false, paused = false, lastSpeechAt = null, blockedUntil = -Infinity;
+  let floor = .003, warmup = 0, voiced = 0, silence = 0, active = false, paused = false, lastSpeechAt = null, lastVoicedAt = null, blockedUntil = -Infinity;
   function reset() { voiced = silence = 0; active = paused = false; lastSpeechAt = null; }
   return {
     reset,
+    // Survives reset(): the last moment the user was actually voiced, for speech-end timing at commit.
+    get lastVoicedAt() { return lastVoicedAt; },
     push(bytes, at, speaking = false) {
       if (speaking) blockedUntil = at + 100;
       if (speaking || at < blockedUntil) {
@@ -50,8 +52,8 @@ export function createEnergyVAD({ onPause = () => {}, onOnset = () => {}, onBloc
         // ponytail: energy is not a speech classifier; persistent music needs a trained VAD.
         if (energy > Math.max(.008, floor * 3)) {
           voiced += ms; silence = 0; paused = false;
-          lastSpeechAt = at - duration + end / 32;
-          // Onset fires once per turn, ~120 ms after voicing; Flux StartOfTurn arrives 300–520 ms later.
+          lastSpeechAt = lastVoicedAt = at - duration + end / 32;
+          // Onset fires once per turn, ~120 ms after voicing; the first provider partial arrives later.
           if (voiced >= 120 && !active) { active = true; onOnset({ at: lastSpeechAt - voiced, detectedAt: at }); }
         } else {
           if (!active) { voiced = 0; continue; }
@@ -63,18 +65,24 @@ export function createEnergyVAD({ onPause = () => {}, onOnset = () => {}, onBloc
   };
 }
 
-// https://developers.deepgram.com/docs/flux/quickstart
-export function fluxUrl({ eot = 0.5 } = {}) {
-  const url = new URL('wss://api.deepgram.com/v2/listen');
-  url.search = new URLSearchParams({ model: 'flux-general-multi', encoding: 'linear16',
-    sample_rate: '16000', eot_threshold: String(eot), eot_timeout_ms: '5000' });
-  url.searchParams.append('language_hint', 'en');
-  url.searchParams.append('language_hint', 'es');
-  url.searchParams.append('language_hint', 'ru');
+// https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime
+// No language_code: Scribe auto-detects, so any supported language works. The single-use token rides in the query (browsers cannot set WebSocket headers).
+export function scribeUrl({ token, model = 'scribe_v3_live', silenceSecs = 1 } = {}) {
+  const url = new URL('wss://api.elevenlabs.io/v1/speech-to-text/realtime');
+  url.search = new URLSearchParams({ model_id: model, audio_format: 'pcm_16000', commit_strategy: 'turn_prediction', vad_silence_threshold_secs: String(silenceSecs) });
+  if (token) url.searchParams.set('token', token);
   return url.href;
 }
+// One mic frame (16 kHz mono PCM16 LE) as the realtime socket's JSON message.
+export function scribeChunk(bytes) {
+  let binary = '';
+  for (const b of new Uint8Array(bytes)) binary += String.fromCharCode(b);
+  return JSON.stringify({ message_type: 'input_audio_chunk', audio_base_64: btoa(binary), commit: false, sample_rate: 16000 });
+}
+// Provider failures end the session; warnings and benign no-audio notices are ignored. Never forward provider prose.
+const FATAL = new Set(['error', 'auth_error', 'quota_exceeded', 'rate_limited', 'queue_overflow', 'resource_exhausted', 'session_time_limit_exceeded', 'input_error', 'invalid_request', 'chunk_size_exceeded', 'transcriber_error', 'unaccepted_terms']);
 
-export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {}, onPartial = () => {}, onCommit = () => {}, onSpeechStart = () => {}, onSpeechEnd = () => {}, onSpeechCancel = () => {}, onPause = () => {}, onDiagnostic = () => {}, onState = () => {}, onError = () => {} }) {
+export function createVoice({ audio, silenceSecs = 1, pauseMs = 250, onOnset = () => {}, onPartial = () => {}, onCommit = () => {}, onSpeechStart = () => {}, onSpeechEnd = () => {}, onSpeechCancel = () => {}, onPause = () => {}, onDiagnostic = () => {}, onState = () => {}, onError = () => {} }) {
   let current = null, state = 'idle', lastPartial = '';
   function setState(next) { state = next; onState(next, { at: performance.now() }); }
   function cleanup(session) {
@@ -124,7 +132,7 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
       socket: null, ready: false, inputEnabled: true };
     current = session; lastPartial = '';
     holdInput(session, inputReady);
-    session.endedTurn = session.startedTurn = -1;
+    session.turn = 0; session.endedTurn = session.startedTurn = -1; session.turnStartAt = new Map();
     session.echoTurns = new Map();
     session.vad = createEnergyVAD({ onPause: result => {
       if (session.startedTurn > session.endedTurn) onPause(result);
@@ -143,7 +151,7 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
       return Promise.reject(error);
     }
     setState('connecting');
-    // Fresh 30-second token starts only on Talk, parallel to permission/worklet setup.
+    // Fresh single-use token starts only on Talk, parallel to permission/worklet setup.
     const token = fetch('/api/stt-token', { method:'POST', headers:{'Content-Type':'application/json'},
       body:'{}', signal:session.controller.signal });
     token.catch(()=>{});
@@ -166,13 +174,14 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
         await new Promise((resolve, reject) => {
           session.reject = reject;
           session.timeout = setTimeout(() => fail(session, 'connection_timeout'), 15000);
-          const socket = session.socket = new WebSocket(fluxUrl({ eot }), ['bearer', data.token]);
+          const socket = session.socket = new WebSocket(scribeUrl({ token: data.token, model: typeof data.model === 'string' ? data.model : undefined, silenceSecs }));
           socket.onmessage = async event => {
             if (current !== session) return;
             let message;
             try { message = JSON.parse(event.data); } catch { fail(session, 'invalid_message'); return; }
-            if (!message || typeof message !== 'object') { fail(session, 'invalid_message'); return; }
-            if (message.type === 'Connected') {
+            if (!message || typeof message !== 'object' || typeof message.message_type !== 'string') { fail(session, 'invalid_message'); return; }
+            const type = message.message_type;
+            if (type === 'session_started') {
               if (session.ready) return;
               session.ready = true;
               clearTimeout(session.timeout);
@@ -189,27 +198,26 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
                 session.samples += frame.byteLength;
                 // Fillers have no lexical echo; they must not extend local onset suppression.
                 session.vad.push(frame, at, audio.speakingWords?.() ?? audio.speaking());
-                socket.send(frame);
+                socket.send(scribeChunk(frame));
               };
               session.source.connect(session.worklet).connect(context.destination); // Worklet outputs silence.
               if (session.inputEnabled) setState('listening');
               resolve();
               session.reject = null;
-            } else if (message.type === 'TurnInfo') {
+            } else if (type === 'partial_transcript' || type === 'committed_transcript') {
               if (!session.inputEnabled) return;
-              let { transcript: text } = message;
-              const { turn_index: turn, event: kind } = message;
-              if (typeof text !== 'string' || !Number.isInteger(turn) || turn < 0) { fail(session, 'invalid_message'); return; }
-              if (turn <= session.endedTurn) return;
+              let { text } = message;
+              if (typeof text !== 'string') { fail(session, 'invalid_message'); return; }
+              const kind = type === 'committed_transcript' ? 'commit' : 'partial', turn = session.turn;
               const at = performance.now();
+              // Empty partials are keepalives ("no speech in this segment").
+              if (kind === 'partial' && !text.trim()) return;
               let echoTurn = session.echoTurns.get(turn);
               if (!echoTurn) {
-                const start = message.words?.[0]?.start;
-                const heardAt = Number.isFinite(start) && start >= 0 && session.audioStartedAt != null
-                  ? Math.min(at, session.audioStartedAt + start * 1000) : at;
+                session.turnStartAt.set(turn, at);
                 // Pin references to this turn, not the session: old lines cannot poison later replies.
                 const lines = audio.echoReferences
-                  ? audio.echoReferences.filter(ref => heardAt >= ref.startAt && heardAt <= ref.endAt + 150).map(ref => ref.line)
+                  ? audio.echoReferences.filter(ref => at >= ref.startAt && at <= ref.endAt + 150).map(ref => ref.line)
                   : (audio.echoLines ?? [audio.currentLine]).filter(Boolean);
                 echoTurn = { lines, trimmed: false };
                 session.echoTurns.set(turn, echoTurn);
@@ -230,19 +238,22 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
                 if (!echoTurn.trimmed) { echoTurn.trimmed = true; onDiagnostic({ mergedTurnsTrimmed: 1 }); }
               }
               const normalized = normalizeText(text);
-              if (kind === 'EndOfTurn') {
+              if (kind === 'commit') {
                 const admitted = session.startedTurn === turn;
-                session.endedTurn = turn; lastPartial = ''; session.vad.reset(); session.pendingPause = null;
+                session.endedTurn = turn; session.turn = turn + 1; lastPartial = ''; session.vad.reset(); session.pendingPause = null;
                 for (const index of session.echoTurns.keys()) if (index <= turn) session.echoTurns.delete(index);
+                session.turnStartAt.delete(turn);
+                // Segments with no speech (silence commits) never open a turn.
+                if (!admitted && !normalized && !words.length) return;
                 if (echo || !normalized) {
                   onDiagnostic({ cancelledTurns: 1 });
                   if (admitted) onSpeechCancel();
                   return;
                 }
                 if (!admitted) { session.startedTurn = turn; onSpeechStart({ at }); if (audio.speaking()) audio.stop(); }
-                const end = Array.isArray(message.words) ? message.words.at(-1)?.end : null;
-                const speechEndAt = Number.isFinite(end) && end >= 0 && session.audioStartedAt != null
-                  ? Math.min(at, session.audioStartedAt + end * 1000) : at;
+                // Scribe sends no word timings here; the last locally voiced moment bounds the end of speech.
+                const voiced = session.vad.lastVoicedAt;
+                const speechEndAt = Number.isFinite(voiced) && voiced <= at ? voiced : at;
                 onSpeechEnd({ at: speechEndAt, detectedAt: at });
                 onCommit({ text, at, speechEndAt, committedAt: at, fallback: false });
                 return;
@@ -251,8 +262,8 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
               // Wait for evidence on an ambiguous short playback prefix, never discard its final.
               if (normalized && words.length < 3 && (audio.speakingWords?.() ?? audio.speaking())
                 && echoTurn.lines.some(line => normalizeText(line).startsWith(normalized + ' '))) return;
-              // A bare onset during playback could be their echo. Admit it on the first non-echo words.
-              if (session.startedTurn !== turn && (normalized || kind === 'StartOfTurn' && !audio.speaking())) {
+              // The first non-echo words of a segment open the turn (there is no bare provider onset).
+              if (session.startedTurn !== turn && normalized) {
                 session.startedTurn = turn; lastPartial = '';
                 onSpeechStart({ at });
                 if (session.pendingPause) { onPause(session.pendingPause); session.pendingPause = null; }
@@ -262,9 +273,7 @@ export function createVoice({ audio, eot = 0.5, pauseMs = 250, onOnset = () => {
                 lastPartial = normalized;
                 onPartial({ text, at });
               }
-
-            } else if (message.type === 'FatalError') {
-              // Never forward provider prose, which can contain text/secrets.
+            } else if (FATAL.has(type)) {
               fail(session, 'provider_error');
             }
           };

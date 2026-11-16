@@ -18,7 +18,7 @@ function fixture() {
     playClip: async (kind, { when }) => { sounds.push({ kind, when, at: clock }); return { startAt: typeof when==='function'?when():when, done: Promise.resolve() }; },
     say: async (text, { when }) => { sounds.push({ text, when, at: clock }); return { startAt: typeof when==='function'?when():when, done: Promise.resolve() }; },
   };
-  const context = vm.createContext({ cancelArrival(){}, CATALOG, audio, speakCascade, STROKE_THRESHOLDS, cuePlan, nodAllowed, needs:{event(){},mood:()=>({})}, trace: { enabled: false }, t: 0, companionName:'Alex',character:{view:{position:[0,1,4.6]}},dynamics:{com:[0,0,0],state:'idle'},lastTouchTarget:[0,.8,0],touch:{},
+  const context = vm.createContext({ cancelArrival(){}, CATALOG, audio, speakCascade, STROKE_THRESHOLDS, cuePlan, nodAllowed, needs:{event(){},mood:()=>({})}, trace: { enabled: false }, t: 0, memory:{get:()=>({name:null,facts:[]}),set(){}},debugPanel:null,character:{view:{position:[0,1,4.6]}},dynamics:{com:[0,0,0],state:'idle'},lastTouchTarget:[0,.8,0],touch:{},
     performance: { now: () => clock }, AbortController, DOMException, TextDecoder, Promise,
     setTimeout: (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, at: clock + delay }); return id; },
     clearTimeout: id => timers.delete(id), clipsReady: Promise.resolve(), metrics: {}, disposed: false,
@@ -164,13 +164,13 @@ test('decision stream error after wave stays silent',async()=>{
   f.requests[0].send({error:{stage:'react',code:'network'}});f.requests[0].close();await pending;await flush();
   assert.equal(f.sounds.length,0);assert.equal(f.motions.length,1);
 });
-test('local speech onset cancels selector; partials wait for Flux end', async () => {
+test('local speech onset cancels selector; partials wait for the provider commit', async () => {
   const f = fixture(); void f.commit('turno viejo'); await flush();
   vm.runInContext('onSpeechStart()', f.context); assert.equal(f.requests[0].signal.aborted, true);
   f.partial('nueva frase'); await f.advance(2000); assert.equal(f.requests.length, 1);
 });
 
-test('partials never request a reaction before committed Flux end',async()=>{
+test('partials never request a reaction before the committed transcript',async()=>{
   const f=fixture();f.partial('hola amiga');await f.advance(5000);
   assert.equal(f.requests.length,0);assert.equal(f.sounds.length,0);
   const pending=f.commit('hola amiga');await flush();assert.equal(f.requests.length,1);

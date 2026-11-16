@@ -1,5 +1,5 @@
 // Opt-in only. No microphone, network interception, timers or audio graph changes while off.
-export const CHANNELS = ['at', 'leanX', 'leanZ', 'squash', 'twist', 'offsetX', 'offsetY', 'offsetZ', 'eyeL', 'eyeR', 'gazeX', 'gazeY', 'smileL', 'smileR', 'mouth', 'nubL', 'nubR', 'touchX', 'touchY', 'touchZ', 'touchSquash', 'touchTiltX', 'touchTiltZ', 'dent', 'listening', 'thinking', 'speaking', 'pauseAt', 'viewerYaw', 'viewerPitch', 'flowerX', 'flowerZ'];
+export const CHANNELS = ['at', 'leanX', 'leanZ', 'squash', 'twist', 'offsetX', 'offsetY', 'offsetZ', 'eyeL', 'eyeR', 'gazeX', 'gazeY', 'smileL', 'smileR', 'mouth', 'nubL', 'nubR', 'touchX', 'touchY', 'touchZ', 'touchSquash', 'touchTiltX', 'touchTiltZ', 'dent', 'listening', 'thinking', 'speaking', 'pauseAt', 'viewerYaw', 'viewerPitch'];
 // Same file, two scopes: browser recorder + CSP-safe AudioWorklet (no extra module).
 if (typeof registerProcessor === 'function') registerProcessor('mintie-trace-tap', class extends AudioWorkletProcessor {
   process(inputs) {
@@ -122,7 +122,6 @@ export function createTrace({ audio, performer, touch, pick, capacity = 72000 } 
     ring[i+24] = +inputs.listening; ring[i+25] = +inputs.thinking; ring[i+26] = inputs.speaking; ring[i+27] = Number.isFinite(inputs.pauseAt) ? inputs.pauseAt : -1;
     const viewer = inputs.viewer ?? [0,.65,7], self = inputs.self ?? [0,0,0], dx = viewer[0]-self[0], dy = viewer[1]-self[1]-.65, dz = viewer[2]-self[2];
     ring[i+28] = Math.atan2(dx,dz); ring[i+29] = Math.max(-.45,Math.min(.45,Math.atan2(dy,Math.hypot(dx,dz))/.65));
-    ring[i+30] = dyn.flower?.swing?.[0] ?? 0; ring[i+31] = dyn.flower?.swing?.[1] ?? 0;
     const hop = touch?.lastHop;
     if (hop && hop.at !== lastHopAt) { lastHopAt = hop.at; const { at: engineAt, ...beat } = hop; emit('hop_beat', { ...beat, engineAt }, at); }
     if (costs.length < capacity) costs.push(clock() - before);

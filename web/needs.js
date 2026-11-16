@@ -7,7 +7,7 @@ export function createNeeds({seed=1,initial}={}) {
   function event(kind, at=last) {
     if(kind==='userSpeech'||kind==='mintieSpeech') {lastActivity=at;mood.social=clamp(mood.social-.18);mood.energy=clamp(mood.energy-.04);}
     if(['poke','pat'].includes(kind)) {lastActivity=at;mood.play=clamp(mood.play+.22);mood.curiosity=clamp(mood.curiosity+.08);mood.energy=clamp(mood.energy-.02);}
-    if(['pet','pet_flower'].includes(kind)) {lastActivity=at;mood.social=clamp(mood.social-.15);mood.play=clamp(mood.play-.05);mood.energy=clamp(mood.energy-.01);}
+    if(['pet'].includes(kind)) {lastActivity=at;mood.social=clamp(mood.social-.15);mood.play=clamp(mood.play-.05);mood.energy=clamp(mood.energy-.01);}
     if(['lift','hold','shake'].includes(kind)) {lastActivity=at;mood.energy=clamp(mood.energy-.04);}
     if(['throw','drop'].includes(kind)) {lastActivity=at;waryUntil=at+15000;mood.play=0;mood.energy=clamp(mood.energy-.12);}
     if(kind==='land') {lastActivity=at;mood.energy=clamp(mood.energy-.03);}
@@ -33,7 +33,7 @@ export function createNeeds({seed=1,initial}={}) {
     const weights=[1+3*mood.curiosity,1+4*mood.play,1+3*mood.curiosity,1+3*mood.social,1+3*(1-mood.energy),1+3*(1-mood.energy)];
     let pick=rand()*weights.reduce((a,b)=>a+b,0),index=0;
     while(index<weights.length-1 && (pick-=weights[index])>=0)index++;
-    return {kind:'micro',micro:['look','wiggle','sunflower','hum-sway','stretch','double-blink'][index]};
+    return {kind:'micro',micro:['look','wiggle','bud-wave','hum-sway','stretch','double-blink'][index]};
   }
   return {event,update,mood:()=>Object.fromEntries(Object.entries(mood).map(([k,v])=>[k,Math.round(v*100)/100])),
     drowsy:()=>mood.energy<.25&&last-lastActivity>=40000,

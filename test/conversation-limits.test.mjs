@@ -19,32 +19,56 @@ function setup() {
     speak(value) { speaking = value; }, hide() { context.document.visibilityState = 'hidden'; hidden(); }, active: () => !!timer };
 }
 
-test('name submit calls shared starter synchronously, including while health is loading', () => {
-  let submit, clicks = 0, message = '', focused = '';
-  const nodes = Object.fromEntries(['name-form', 'name-input', 'name-dialog', 'talk', 'end', 'status'].map(id => [id, {}]));
-  nodes['name-form'].addEventListener = (_, fn) => { submit = fn; };
-  nodes['name-input'].value = 'Alex'; nodes['name-dialog'].close = () => {};
-  nodes.talk.click = () => { clicks++; context.voiceWanted = true; };
-  for (const id of ['talk', 'end', 'status']) nodes[id].focus = () => { focused = id; };
-  const context = vm.createContext({ $: id => nodes[id], companionName:'', end(){context.voiceWanted=false;}, startCall(){if(context.voiceWanted || context.healthAnswered && !context.voiceAvailable)return;clicks++;context.voiceWanted=true;}, validName: () => true, localStorage: { setItem() {} }, interact() {}, status: value => { message = value; }, voiceAvailable: true, voiceWanted: false, healthAnswered: true });
-  vm.runInContext(source.slice(source.indexOf("$('name-form').addEventListener"), source.indexOf("$('name-input').addEventListener")), context);
-  const send = () => submit({ preventDefault() {} });
-  send(); assert.equal(clicks, 1); assert.equal(focused, 'end');
-  send(); assert.equal(clicks, 1); // Rename during call.
-  context.voiceWanted = false; context.voiceAvailable = false; send(); assert.equal(clicks, 1);
-  context.healthAnswered = false; send(); assert.equal(clicks, 2); assert.equal(focused, 'end');
-});
-
-test('arrival waits for drawn frames and dialog, plays once without requests', () => {
+test('arrival waits for drawn frames, plays once without requests', () => {
   const code = source.slice(source.indexOf('  if (arrivalPending && debug.frame.count > 1'), source.indexOf('  frameId = requestAnimationFrame(tick);'));
   const waves = [], history = [];
-  const context = vm.createContext({ companionName:'Alex', arrivalPending: true, arrivalWave: null, debug: { frame: { count: 0 } }, $: () => ({ open: context.dialogOpen }), dialogOpen: false,
+  const context = vm.createContext({ arrivalPending: true, arrivalWave: null, debug: { frame: { count: 0 } },
     performer: { active: () => null, play: emoji => (waves.push(emoji), {}) }, speechActive: false, pointer: null, remember: entry => history.push(entry), fetch: () => { throw Error('unexpected network'); } });
   const frame = count => { context.debug.frame.count = count; vm.runInContext(code, context); };
   frame(0); frame(1); assert.equal(waves.length, 0); // No draw, or first draw only.
-  context.dialogOpen = true; frame(2); assert.equal(waves.length, 0);
-  context.dialogOpen = false; frame(3); frame(4);
+  frame(2); frame(3);
   assert.deepEqual(waves, ['👋']); assert.equal(JSON.stringify(history), '[{"who":"mintie","emoji":"👋","said":null}]');
+});
+
+test('no name prompt anywhere in the shell', async () => {
+  const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8'), css = readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
+  for (const [file, text] of [['main.js', source], ['index.html', html], ['styles.css', css]]) assert.doesNotMatch(text, /name-dialog|name-input|name-form|edit-name|companionName|mintie-name|name-link/, file);
+  assert.doesNotMatch(html + source, /sunflower|pet_flower|'flower'|orbit/);
+});
+
+test('guard errors map to kind copy, only for failures, and never touch the dock buttons', () => {
+  const code = source.slice(source.indexOf('const GUARD ='), source.indexOf('const hint ='));
+  const texts = [], classes = {}, nodes = { status: { set textContent(v) { texts.push(v); }, classList: { toggle: (k, v) => { classes[k] = v; } } }, controls: { dataset: {} } };
+  const context = vm.createContext({ $: id => nodes[id], debugPanel: null, disposed: false, voiceAvailable: true, reactAvailable: true, showVoiceState() {}, setTimeout: () => 1, clearTimeout() {},
+    window: { fetch: () => {} , location: {} }, location: { origin: 'x', href: 'x' }, URL, Response, ensureSession: async () => {}, document: {} });
+  vm.runInContext(code.slice(0, code.indexOf('// Paid routes')), context);
+  vm.runInContext("status('Tap Talk to chat.')", context); assert.equal(texts.at(-1), 'Tap Talk to chat.');
+  vm.runInContext("guardNotice('daily_limit')", context);
+  assert.match(texts.at(-1), /resting until tomorrow — you can still play/); assert.equal(nodes.controls.dataset.resting, 'true');
+  assert.equal(context.voiceAvailable, false);
+  vm.runInContext("status('Their response did not come through. Try again.')", context); assert.match(texts.at(-1), /resting until tomorrow/);
+  vm.runInContext("status('Microphone off. You can keep playing.')", context); assert.equal(texts.at(-1), 'Microphone off. You can keep playing.');
+  vm.runInContext("guardNotice('nope')", context); // unknown codes are ignored
+  assert.match(source, /!response\.ok && \[403, 429\]\.includes\(response\.status\)/);
+});
+
+test('paid routes get one human-check retry; other routes and origins pass straight through', async () => {
+  const code = source.slice(source.indexOf('const nativeFetch ='), source.indexOf('const hint ='));
+  const calls = [], sessions = [], notices = [];
+  let replies = [];
+  const context = vm.createContext({ URL, Response, location: { origin: 'http://a', href: 'http://a/' }, guardNotice: c => notices.push(c),
+    ensureSession: async o => { sessions.push(o?.force ?? false); },
+    window: { fetch: async (url) => { calls.push(String(url)); return replies.shift(); } } });
+  context.window.fetch.bind = () => context.window.fetch;
+  vm.runInContext(code + '\nthis.go = window.fetch;', context);
+  const err = (status, code) => Response.json({ error: { stage: 's', code } }, { status });
+  replies = [new Response('ok')]; await context.go('/api/health'); assert.deepEqual(sessions, []); // free route: no check
+  replies = [err(403, 'human_check'), new Response('ok')];
+  assert.equal((await context.go('/api/react', {})).status, 200); assert.deepEqual(sessions, [false, true]); assert.equal(calls.length, 3); assert.deepEqual(notices, []);
+  sessions.length = 0; replies = [err(429, 'daily_limit')];
+  assert.equal((await context.go('/api/say', {})).status, 429); assert.deepEqual(notices, ['daily_limit']);
+  replies = [err(403, 'human_check'), err(403, 'human_check')];
+  await context.go('/api/stt-token', {}); assert.deepEqual(notices, ['daily_limit', 'human_check']);
 });
 
 test('quiet timeout and speech reset', () => {

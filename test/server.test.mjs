@@ -9,7 +9,7 @@ import {once} from 'node:events';
 import {loadKeys,createApp,generateLine,configureServer,jsonBody,cleanLine,validLine,responseEvents,proseResult,lineRequest,validRequest,repeatedLine,repeatedSound,soundKey,recentSounds,timestampObjects,alignedChunk} from '../server/server.mjs';
 import {CATALOG} from '../web/perform/emoji.js';
 import {decisionRequest} from '../server/decision.mjs';
-const keys={OPENROUTER_API_KEY:'SENTINEL_OPENROUTER_SECRET',ELEVENLABS_API_KEY:'SENTINEL_ELEVEN_SECRET',TYPESAFE_API_KEY:'SENTINEL_TYPESAFE_SECRET',DEEPGRAM_API_KEY:'SENTINEL_DEEPGRAM_SECRET'};
+const keys={OPENROUTER_API_KEY:'SENTINEL_OPENROUTER_SECRET',ELEVENLABS_API_KEY:'SENTINEL_ELEVEN_SECRET',TYPESAFE_API_KEY:'SENTINEL_TYPESAFE_SECRET'};
 const frame=event=>`data: ${JSON.stringify(event)}\n\n`+(event.choices?.[0]?.finish_reason==='stop'?'data: [DONE]\n\n':'');
 const delta=delta=>({choices:[{delta:{content:delta},finish_reason:null}]});
 const completed={choices:[{delta:{},finish_reason:'stop'}]};
@@ -29,11 +29,11 @@ async function fixture(t,mock=async(url,o)=>url.includes('typesafe')?jev():kind(
   }
   return {request,calls,logs,port,origin};
 }
-test('loadKeys honors explicit names; default excludes OpenAI, includes Deepgram',async t=>{
+test('loadKeys honors explicit names; default excludes OpenAI, includes System One',async t=>{
   const dir=await mkdtemp(path.join(tmpdir(),'mintie-keys-')),file=path.join(dir,'fixture.env');
   t.after(()=>rm(dir,{recursive:true,force:true}));
-  await writeFile(file,'OPENAI_API_KEY="test-openai"\r\nELEVENLABS_API_KEY= test-eleven \r\nTYPESAFE_API_KEY=\'test-typesafe\'\r\nOPENROUTER_API_KEY="test-router=a"\r\nOTHER_SECRET=ignored\r\nDEEPGRAM_API_KEY=test-deepgram\r\n#OPENROUTER_API_KEY=comment\r\n');
-  assert.deepEqual(await loadKeys(file),{OPENROUTER_API_KEY:'test-router=a',ELEVENLABS_API_KEY:'test-eleven',TYPESAFE_API_KEY:'test-typesafe',DEEPGRAM_API_KEY:'test-deepgram'});
+  await writeFile(file,'OPENAI_API_KEY="test-openai"\r\nELEVENLABS_API_KEY= test-eleven \r\nTYPESAFE_API_KEY=\'test-typesafe\'\r\nOPENROUTER_API_KEY="test-router=a"\r\nOTHER_SECRET=ignored\r\nSYSTEM_ONE_API_KEY=test-system-one\r\n#OPENROUTER_API_KEY=comment\r\n');
+  assert.deepEqual(await loadKeys(file),{OPENROUTER_API_KEY:'test-router=a',ELEVENLABS_API_KEY:'test-eleven',TYPESAFE_API_KEY:'test-typesafe',SYSTEM_ONE_API_KEY:'test-system-one'});
   assert.deepEqual(await loadKeys(file,['OPENROUTER_API_KEY']),{OPENROUTER_API_KEY:'test-router=a'});
   assert.deepEqual(await loadKeys(file,[]),{});
 });
@@ -46,7 +46,7 @@ test('host/origin/JSON/size/static containment and rate limits',async t=>{
   for(const url of ['/../secret','/%2e%2e/secret','/escape','/.hidden'])assert.equal((await request(url,{method:'GET'})).status,404);
   assert.match((await request('/vendor/three/three.module.js',{method:'GET'})).headers['content-type'],/^text\/javascript/);
   const html=await request('/',{method:'GET'});assert.equal(html.headers['cache-control'],'no-store');assert.ok(html.headers['content-security-policy']);
-  assert.deepEqual(JSON.parse((await request('/api/health',{method:'GET'})).body),{ok:true,stt:true,react:true,say:true});
+  assert.deepEqual(JSON.parse((await request('/api/health',{method:'GET'})).body),{ok:true,stt:true,react:true,say:true,decider:'system-one'});
   for(let i=0;i<8;i++)await request('/api/react');assert.equal((await request('/api/react')).status,429);
 });
 test('public mode: exact https origin replaces loopback check; daily ceiling resets at UTC midnight',async t=>{
@@ -72,7 +72,7 @@ test('two-pass speculative requests start before Jev, plain prose separates capt
   const r=await request('/api/react'),out=rows(r.body);
   assert.deepEqual(out.slice(0,2),[{emoji:'👋',gaze:'viewer',hop:'none'},{voice:'words',filler:'none'}]);assert.equal(out[2].line,'¡Hola! [giggles]');assert.equal(out[2].display,'¡Hola! 🥳');assert.deepEqual(out[3],{cue:null});
   assert.deepEqual(calls.map(c=>c.body.model),['deepseek/deepseek-v4.1-flash','deepseek/deepseek-v4.1-flash','jev-1.14.0','jev-1.14.0']);
-  for(const c of calls.slice(0,2)){assert.equal(c.url,'https://openrouter.ai/api/v1/chat/completions');assert.deepEqual(c.body.reasoning,{enabled:false});assert.deepEqual(c.body.provider,{order:['wafer/us','together','parasail/fp8'],allow_fallbacks:true,sort:'latency'});assert.equal(c.body.usage,undefined);assert.equal(c.body.service_tier,undefined);assert.equal(c.body.store,undefined);assert.equal(c.body.stream,true);assert.equal(JSON.parse(c.body.messages[1].content).emoji,undefined);}
+  for(const c of calls.slice(0,2)){assert.equal(c.url,'https://openrouter.ai/api/v1/chat/completions');assert.deepEqual(c.body.reasoning,{enabled:false});assert.deepEqual(c.body.provider,{order:['wafer/us','together','parasail/fp8'],allow_fallbacks:true,sort:'latency'});assert.deepEqual(c.body.usage,{include:true});assert.equal(c.body.service_tier,undefined);assert.equal(c.body.store,undefined);assert.equal(c.body.stream,true);assert.equal(JSON.parse(c.body.messages[1].content).emoji,undefined);}
   assert.match(calls[1].body.messages[0].content,/NEVER mention, describe or deny/);assert.equal(calls[0].signal.aborted,true);
 });
 test('line flushes before blocked pass 2; pass 2 cue overrides DeepSeek fallback',async t=>{
@@ -87,9 +87,9 @@ test('line flushes before blocked pass 2; pass 2 cue overrides DeepSeek fallback
 });
 test('pass 2 timeout/failure/null keeps emoji fallback; no fallback leaves initial move sustaining',async t=>{
   for(const mode of ['timeout','error','null']) {
-    const {request,logs}=await fixture(t,async(url,o)=>url.includes('typesafe')?jev():kind(JSON.parse(o.body))==='words'?sse('Hello 🥳'):sse('Ay'),{jevTimeoutMs:10,emoteMock:async()=>{if(mode==='timeout')return new Promise(()=>{});if(mode==='error')throw Error('private');return Response.json({answers:{emote:{type:'choice',choice:'null'},timing:{type:'choice',choice:'none'},word:{type:'choice',choice:'1: Hello'}}});}});
+    const {request,logs}=await fixture(t,async(url,o)=>url.includes('typesafe')?jev():kind(JSON.parse(o.body))==='words'?sse('Hello 🥳'):sse('Ay'),{systemOneTimeoutMs:10,emoteMock:async()=>{if(mode==='timeout')return new Promise(()=>{});if(mode==='error')throw Error('private');return Response.json({answers:{emote:{type:'choice',choice:'null'},timing:{type:'choice',choice:'none'},word:{type:'choice',choice:'1: Hello'}}});}});
     assert.deepEqual(rows((await request('/api/react')).body)[3],mode==='null'?{cue:null}:{cue:{emoji:'🎉',at:0}});
-    assert.equal(logs.filter(x=>x.stage==='jev-emote').length,1);
+    assert.equal(logs.filter(x=>x.stage==='system-one-emote').length,1);
   }
   const {request}=await fixture(t);assert.deepEqual(rows((await request('/api/react')).body)[3],{cue:null});
 });
@@ -97,7 +97,7 @@ test('words already running while Jev blocked; motion flushes before words compl
   let releaseWords,releaseJev;const held=new Promise(r=>releaseWords=r),jevHeld=new Promise(r=>releaseJev=r);t.after(()=>{releaseWords();releaseJev();});
   const {port,origin,calls}=await fixture(t,async(url,o)=>{if(url.includes('typesafe')){await jevHeld;return jev();}if(kind(JSON.parse(o.body))==='words'){await held;return words();}return sse('Ay');});
   const result=new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:'/api/react',method:'POST',headers:{origin,'content-type':'application/json'}},res=>{let text='';res.on('data',c=>{text+=c;if(text.includes('\n')){assert.equal(rows(text)[0].emoji,'👋');releaseWords();}});res.on('end',()=>resolve(rows(text)));});req.on('error',reject);req.end('{"text":"Hola"}');});
-  await new Promise(r=>setTimeout(r,25));assert.equal(calls.length,3);releaseJev();assert.equal((await result)[2].line,'¡Qué padre!');
+  await new Promise(r=>setTimeout(r,25));assert.equal(calls.length,3);releaseJev();const out=await result;assert.equal(out[2].line,'¡Qué padre!');
 });
 test('cue guidance shares Jev semantics, anchors optional gestures to words',()=>{
   const r=lineRequest(CATALOG,{text:'¿Qué tal?'},'words');
@@ -107,7 +107,7 @@ test('cue guidance shares Jev semantics, anchors optional gestures to words',()=
 test('both voices mirror latest user language, neutral address, specific replies and brief preference',()=>{
   for(const voice of ['words','sound']) {
     const r=lineRequest(CATALOG,{touch:{kind:'poke'},history:[{who:'user',text:'Hi there',agoMs:1000}]},voice);
-    for(const pattern of [/respond in the language of the current state.text/,/if none or unclear, use English/,/Never assume anyone's gender, including third parties/,/Never invent facts/,/last FOUR history.said/,/names and details/,/never translate away a pun/])assert.match(r.messages[0].content,pattern);
+    for(const pattern of [/respond in the language of the current state.text/,/if none or unclear, use the language of state.memory facts, else English/,/Never assume anyone's gender, including third parties/,/Never invent facts/,/last FOUR history.said/,/names and details/,/never translate away a pun/])assert.match(r.messages[0].content,pattern);
     assert.doesNotMatch(r.messages[0].content,/No other languages/);assert.equal(JSON.parse(r.messages[1].content).history[0].text,'Hi there');
     if(voice==='words'){assert.match(r.messages[0].content,/Usually one breath/);assert.equal(r.max_tokens,320);}else assert.doesNotMatch(r.messages[0].content,/Spanish-first/);
   }
@@ -115,7 +115,7 @@ test('both voices mirror latest user language, neutral address, specific replies
 test('sound interjections follow current user language, not prior sounds',()=>{
   const body={text:'Guess what, I just got my dream job!',history:[{who:'user',text:'Hola',agoMs:6000},{who:'mintie',said:'¡Qué padre!',agoMs:5000}]};
   const request=lineRequest(CATALOG,body,'sound'),prompt=request.messages[0].content;
-  for(const rule of [/SOUND LANGUAGE:/,/use the language of state.text/,/latest history entry with who=user and text/,/Never copy the language of Mintie's history.said or recentSounds/,/English input must NOT get Spanish/,/language-neutral hum\/giggle\/gasp/])assert.match(prompt,rule);
+  for(const rule of [/SOUND LANGUAGE:/,/use the language of state.text/,/latest history entry with who=user and text/,/Never copy the language of Mintie's history.said or recentSounds/,/Interjections must belong to the language of the user's latest utterance/,/language-neutral hum\/giggle\/gasp/])assert.match(prompt,rule);
   assert.doesNotMatch(prompt,/Example: \[giggles\] ay/);
   assert.equal(JSON.parse(request.messages[1].content).text,body.text);
   assert.deepEqual(JSON.parse(request.messages[1].content).recentSounds,['¡Qué padre!']);
@@ -178,7 +178,7 @@ test('Jev timeout/error/malformed falls back to exactly ONE strict DeepSeek deci
   const {request,calls}=await fixture(t,async(url,o)=>{
     if(url.includes('typesafe')){jevSignal=o.signal;if(mode==='timeout')return new Promise(()=>{});return mode==='http'?new Response('private',{status:503}):new Response('{}');}
     return kind(JSON.parse(o.body))==='decision'?sse({animation:'🤔',gaze:null,hop:'none',voice:'words'}):kind(JSON.parse(o.body))==='words'?words():sse('Ay');
-  },{jevTimeoutMs:10});
+  },{systemOneTimeoutMs:10});
   for(mode of ['timeout','http','malformed']){calls.length=0;const out=rows((await request('/api/react')).body);assert.deepEqual(out.slice(0,2),[{emoji:'🤔',gaze:null,hop:'none'},{voice:'words',filler:'none'}]);assert.equal(calls.filter(c=>kind(c.body)==='decision').length,1);assert.equal(calls.length,5);assert.equal(jevSignal.aborted,true);}
 });
 test('keyless Jev fallback uses same single decision and speculative words',async t=>{
@@ -190,18 +190,18 @@ test('plain prose validates tags/secrets/length; caption keeps emojis, TTS strip
   for(const bad of [null,'https://example.com',keys.OPENROUTER_API_KEY,'x'.repeat(601)])assert.equal(run(bad).line,null);
   assert.equal(run('[bad] hi').line,'hi');
   assert.deepEqual(run('[whispers] Hello 🥳 friend 😍!'),{line:'[whispers] Hello friend!',display:'Hello 🥳 friend 😍!',fallback:{emoji:'🎉',at:11}});
-  assert.equal(run('🌻 hi 🙌').fallback.emoji,'🎉');
+  assert.equal(run('🌼 hi 🙌').fallback.emoji,'🎉');
   assert.equal(run('123 1️⃣ hello').line,'123 hello');
   assert.equal(run('only words').fallback,null);
 });
 test('long and truncated prose preserves sentence, tags and emoji boundaries',()=>{
-  const sentence='[giggles] '+('sunflower '.repeat(35))+'arrived! 👩🏽‍🚀',raw=sentence+' '+('more '.repeat(100))+'unfinished';
-  const result=proseResult(raw,{voice:'words',filler:'none'},[]);assert.equal(result.display,sentence.replace('[giggles] ',''));assert.equal(result.line,'[giggles] '+('sunflower '.repeat(35))+'arrived!');assert.ok(result.line.length<=600 && result.display.length<=600);
+  const sentence='[giggles] '+('dandelion '.repeat(35))+'arrived! 👩🏽‍🚀',raw=sentence+' '+('more '.repeat(100))+'unfinished';
+  const result=proseResult(raw,{voice:'words',filler:'none'},[]);assert.equal(result.display,sentence.replace('[giggles] ',''));assert.equal(result.line,'[giggles] '+('dandelion '.repeat(35))+'arrived!');assert.ok(result.line.length<=600 && result.display.length<=600);
   assert.equal(proseResult('A complete sentence. unfinished',{voice:'words',filler:'none'},[],[],true).line,'A complete sentence.');
   assert.equal(proseResult('unfinished words here',{voice:'words',filler:'none'},[],[],true).line,'unfinished words…');
 });
 test('react emits usable words after length finish',async t=>{
-  const story='[giggles] '+('sunflower '.repeat(35))+'arrived! '+('more '.repeat(80))+'unfinished';
+  const story='[giggles] '+('dandelion '.repeat(35))+'arrived! '+('more '.repeat(80))+'unfinished';
   const {request}=await fixture(t,async(url,o)=>url.includes('typesafe')?jev():kind(JSON.parse(o.body))==='words'?new Response(frame(delta(story))+frame({choices:[{delta:{},finish_reason:'length'}]})+'data: [DONE]\n\n'):sse('Ay'));
   const out=rows((await request('/api/react')).body);const line=out.find(x=>Object.hasOwn(x,'line'));assert.ok(line.line);assert.ok(line.line.length<=600);assert.match(line.line,/arrived!$/);
 });
@@ -214,10 +214,10 @@ test('sound freshness guards, four-word cap and spelled interjections only',asyn
   assert.equal(rows((await request('/api/react',{body:{touch:{kind:'poke'},history}})).body)[2].line,'prrr');
 });
 test('cleanLine and SSE framing handle split UTF-8; stream failures sanitized',async t=>{
-  assert.equal(cleanLine('🍓🌻❤️‍🇲🇽👍🏽1️⃣'),null);assert.equal(cleanLine('🌻'),null);assert.equal(validLine('[happy hum] hola'),true);assert.equal(validLine('hola 🌻'),false);
-  const bytes=new TextEncoder().encode(frame(delta('¡Hola! 🌻'))+frame(completed)),events=[];
+  assert.equal(cleanLine('🍓🌼❤️‍🇲🇽👍🏽1️⃣'),null);assert.equal(cleanLine('🌼'),null);assert.equal(validLine('[happy hum] hola'),true);assert.equal(validLine('hola 🌼'),false);
+  const bytes=new TextEncoder().encode(frame(delta('¡Hola! 🌼'))+frame(completed)),events=[];
   for await(const e of responseEvents(new ReadableStream({start(c){for(const b of bytes)c.enqueue(Uint8Array.of(b));c.close();}})))events.push(e);
-  assert.equal(events[0].choices[0].delta.content,'¡Hola! 🌻');
+  assert.equal(events[0].choices[0].delta.content,'¡Hola! 🌼');
   const {request}=await fixture(t,async(url)=>url.includes('typesafe')?jev():new Response(frame({error:{message:keys.OPENROUTER_API_KEY}})));
   const r=await request('/api/react');assert.deepEqual(rows(r.body).at(-1),{error:{stage:'react',code:'invalid_output'}});assert.ok(!r.body.includes(keys.OPENROUTER_API_KEY));
 });
@@ -243,28 +243,28 @@ test('alignment rejects malformed PCM, mismatched characters, backwards/nonfinit
 });
 test('keys/provider errors never escape; HTTP bodies cancel; token passthrough',async t=>{
   let mode='throw',cancelled=0;
-  const {request,logs}=await fixture(t,async(url)=>{if(url.includes('typesafe'))return jev();if(mode==='throw')throw Error(Object.values(keys).join(' '));if(mode==='http')return new Response(new ReadableStream({cancel(){cancelled++;}}),{status:503});return new Response('{"access_token":"short-lived","expires_in":30}');});
+  const {request,logs}=await fixture(t,async(url)=>{if(url.includes('typesafe'))return jev();if(mode==='throw')throw Error(Object.values(keys).join(' '));if(mode==='http')return new Response(new ReadableStream({cancel(){cancelled++;}}),{status:503});return new Response('{"token":"short-lived-token"}');});
   for(const route of ['react','say','stt-token']){const r=await request(`/api/${route}`,{body:route==='stt-token'?{}:{text:'hi'}});for(const k of Object.values(keys))assert.ok(!(r.body+JSON.stringify(logs)).includes(k));assert.equal((route==='react'?rows(r.body).at(-1):JSON.parse(r.body)).error.code,'network');}
-  mode='http';const r=await request('/api/say');assert.equal(r.status,502);assert.equal(cancelled,1);mode='token';assert.deepEqual(JSON.parse((await request('/api/stt-token',{body:{}})).body),{token:'short-lived'});
+  mode='http';const r=await request('/api/say');assert.equal(r.status,502);assert.equal(cancelled,1);mode='token';assert.deepEqual(JSON.parse((await request('/api/stt-token',{body:{}})).body),{token:'short-lived-token',model:'scribe_v3_live'});
 });
-test('Deepgram grant uses a short TTL and no-store; health checks the STT key',async t=>{
-  const {request,calls}=await fixture(t,async()=>Response.json({access_token:'temporary',expires_in:30}));
+test('Scribe token: single-use mint from the server key, no-store, CSP allows only the Scribe socket; keyless is unavailable',async t=>{
+  const {request,calls,logs}=await fixture(t,async()=>Response.json({token:'sutkn_temporary_123'}));
   const response=await request('/api/stt-token',{body:{}});
   assert.equal(response.status,200);assert.equal(response.headers['cache-control'],'no-store');
-  assert.deepEqual(JSON.parse(response.body),{token:'temporary'});
-  assert.equal(calls[0].url,'https://api.deepgram.com/v1/auth/grant');
-  assert.equal(calls[0].headers.authorization,`Token ${keys.DEEPGRAM_API_KEY}`);
-  assert.deepEqual(calls[0].body,{ttl_seconds:30});
+  assert.deepEqual(JSON.parse(response.body),{token:'sutkn_temporary_123',model:'scribe_v3_live'});
+  assert.equal(calls[0].url,'https://api.elevenlabs.io/v1/single-use-token/realtime_scribe');
+  assert.equal(calls[0].method,'POST');assert.equal(calls[0].headers['xi-api-key'],keys.ELEVENLABS_API_KEY);
   assert.deepEqual(calls.slice(1).map(c=>[c.url,c.method??'HEAD',c.headers?.authorization]),[['https://api.typesafe.ai/','HEAD',undefined],['https://openrouter.ai/api/v1/models','HEAD',undefined]]);
-  assert.ok(response.headers['content-security-policy'].includes('wss://api.deepgram.com'));
-  assert.ok(!response.headers['content-security-policy'].includes('wss://api.elevenlabs.io'));
-  const keyless=await fixture(t,undefined,{keys:{ELEVENLABS_API_KEY:keys.ELEVENLABS_API_KEY}});
+  assert.deepEqual(logs.find(x=>x.stage==='usage'),{stage:'usage',provider:'elevenlabs',kind:'stt',sessions:1});
+  const csp=response.headers['content-security-policy'];
+  assert.ok(csp.includes('connect-src \'self\' wss://api.elevenlabs.io'));assert.ok(csp.includes('https://challenges.cloudflare.com'));
+  const keyless=await fixture(t,undefined,{keys:{OPENROUTER_API_KEY:keys.OPENROUTER_API_KEY}});
   assert.equal((await keyless.request('/api/stt-token',{body:{}})).status,503);
   assert.equal(JSON.parse((await keyless.request('/api/health',{method:'GET'})).body).stt,false);
   assert.equal(keyless.calls.length,0);
 });
 test('token rejects malformed grants and reflected secrets',async t=>{
-  for(const data of [{access_token:'x',expires_in:3600},{token:'x'},{access_token:keys.DEEPGRAM_API_KEY,expires_in:30}]) {
+  for(const data of [{token:'x'},{access_token:'whatever_long_enough'},{token:keys.ELEVENLABS_API_KEY},{token:'has spaces and is long'}]) {
     const {request}=await fixture(t,async()=>Response.json(data));
     const response=await request('/api/stt-token',{body:{}});
     assert.equal(response.status,502);assert.equal(JSON.parse(response.body).error.code,'invalid_output');
@@ -317,11 +317,11 @@ test('usage logs counts from mocked providers without content',async t=>{
   const usage={prompt_tokens:120,completion_tokens:4,cost:0.001};
   const stream=`data: ${JSON.stringify(delta('hello'))}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:'stop'}],usage})}\n\ndata: [DONE]\n\n`;
   await generateLine({max_tokens:320},{key:'fake',log:x=>logs.push(x),fetch:async()=>new Response(stream)});
-  assert.deepEqual(logs.find(x=>x.stage==='usage'),{stage:'usage',provider:'openrouter',kind:'words',...usage});
+  assert.deepEqual(logs.find(x=>x.stage==='usage'),{stage:'usage',provider:'openrouter',kind:'llm',voice:'words',tokens:124,usd:0.001});
   const f=await fixture(t,async(url)=>url.includes('typesafe')?Response.json({usage:{input_tokens:123},answers:{animation:{type:'choice',choice:'🙂‍↕️'}}}):new Response('pcm',{headers:{'character-cost':'7'}}));
   await f.request('/api/react',{body:{listening:true,text:'private test input'}});
   await f.request('/api/say',{body:{text:'private'}});
-  assert.deepEqual(f.logs.filter(x=>x.stage==='usage'),[{stage:'usage',provider:'typesafe',kind:'listen',input_tokens:123},{stage:'usage',provider:'elevenlabs',kind:'tts',characters:7}]);
+  assert.deepEqual(f.logs.filter(x=>x.stage==='usage'),[{stage:'usage',provider:'system-one',kind:'decision',pass:'listen',tokens:123,input_tokens:123},{stage:'usage',provider:'elevenlabs',kind:'tts',characters:7}]);
 });
 
 test('listener runs one Jev only, rate limited to one per 3s',async t=>{
@@ -330,7 +330,7 @@ test('listener runs one Jev only, rate limited to one per 3s',async t=>{
   const body={text:'I feel happy',listening:true};
   const first=await request('/api/react',{body});
   assert.equal(first.status,200);assert.deepEqual(JSON.parse(first.body),{emoji:'🙂‍↕️'});
-  assert.equal(calls.length,1);assert.ok(logs.some(x=>x.stage==='jev-listen'));assert.ok(logs.some(x=>x.stage==='usage' && x.provider==='typesafe' && x.kind==='listen'));
+  assert.equal(calls.length,1);assert.ok(logs.some(x=>x.stage==='system-one-listen'));assert.ok(logs.some(x=>x.stage==='usage' && x.provider==='system-one' && x.pass==='listen'));
   assert.equal((await request('/api/react',{body})).status,429);assert.equal(calls.length,1);
   clock+=3000;assert.equal((await request('/api/react',{body})).status,200);assert.equal(calls.length,2);
 });

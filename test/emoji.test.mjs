@@ -21,7 +21,7 @@ test('catalog: fully-qualified intent labels, complete references, safe finite v
     assert.ok(entry.name_es.trim()&&entry.name_en.trim(),`names ${emoji}`);
     assert.ok(Object.hasOwn(FAMILY_DEFAULTS,entry.family));
     const r=entry.recipe;
-    for (const key of ['face','mouth','body','buds','fx','flower','tint','accessory'])
+    for (const key of ['face','mouth','body','buds','fx','tint','accessory'])
       assert.ok(Object.hasOwn(PRIMITIVES[key],r[key]),`${emoji} ${key} ${r[key]}`);
     assert.ok(PRIMITIVES.fx[r.fx].every(f=>FX_KINDS.includes(f.kind)));
     assert.ok(ACCESSORIES.includes(r.accessory));

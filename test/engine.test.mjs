@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {CATALOG,FX_KINDS,ACCESSORIES} from '../web/perform/emoji.js';
 import {createPerformer} from '../web/perform/engine.js';
+import {FACE_YAW} from '../web/character/view.js';
 
 function valid(p) {
   const range=(x,min=0,max=1)=>assert.ok(Number.isFinite(x)&&x>=min-1e-10&&x<=max+1e-10,`${x} outside ${min}..${max}`);
@@ -24,7 +25,7 @@ function valid(p) {
     assert.deepEqual(Object.keys(b).sort(),['side','dir','height','reach','contact','bulge'].sort());
     assert.ok(['none','mouth','chin','brow','eye','ear','cheek','chest','other'].includes(b.contact));
   }
-  range(p.flower.perk,-1,1);range(p.flower.spin,-2,2);range(p.flower.bloom,0.6,1.2);
+  assert.deepEqual(Object.keys(p).sort(),['body','buds','cheeks','eyes','fx','mouth','accessory','tint'].sort());
   assert.ok(p.fx.length<=3);for (const f of p.fx) {assert.ok(FX_KINDS.includes(f.kind));range(f.intensity);}
   assert.ok(['none','red','blue','pale','pink','gold'].includes(p.tint.kind));range(p.tint.amount);
   assert.ok(ACCESSORIES.includes(p.accessory));
@@ -35,9 +36,9 @@ test('new moves keep hop translation in physics and a complete spin in the pose'
     const p=createPerformer(),r=p.play(emoji),frames=[];
     for(let t=0;t<r.durationMs;t+=20) frames.push(p.update(t));
     if(emoji==='🦘') { assert.ok(frames.every(x=>x.body.offset[1]===0));assert.ok(Math.max(...frames.map(x=>x.body.squash))>.1); }
-    if(emoji==='🤸') assert.ok(Math.max(...frames.map(x=>x.body.twist))>=Math.PI*2);
+    if(emoji==='🤸') assert.ok(Math.max(...frames.map(x=>x.body.twist))>=Math.PI*2-FACE_YAW);
     if(emoji==='🙂‍↕️') {assert.ok(frames.every(x=>x.body.offset[1]===0));assert.ok(Math.max(...frames.map(x=>x.body.lean[1]))>=0.34);assert.ok(Math.max(...frames.map(x=>x.body.squash))>=0.35);const dips=frames.filter((x,i)=>i>0&&i<frames.length-1&&x.body.lean[1]>0.1&&x.body.lean[1]>frames[i-1].body.lean[1]&&x.body.lean[1]>frames[i+1].body.lean[1]);assert.ok(dips.length>=2&&dips.length<=3);}
-    if(emoji==='🙂‍↔️') {assert.ok(Math.max(...frames.map(x=>x.body.twist))>=0.35);assert.ok(Math.min(...frames.map(x=>x.body.twist))<=-0.35);}
+    if(emoji==='🙂‍↔️') {assert.ok(Math.max(...frames.map(x=>x.body.twist))-frames[0].body.twist>=0.35);assert.ok(Math.min(...frames.map(x=>x.body.twist))-frames[0].body.twist<=-0.35);}
   }
   const s=createPerformer();assert.equal(s.update(0,{speaking:0.001}).mouth.shape,'o');assert.equal(s.update(1).mouth.shape,'none');
   for (const emoji of '🙈 👋 👍 👎 👏 🤝 🙏 💪 🙅 🤷 🤦 🧏 🤏 ✌️ 🤞 🤙 👉 🫡 ❤️ 💔 🔥 💡 💃 🙉 😴 😌 😎 🙂 😉 🤨 🙄 😐 😞 😟 😠 🥺 😳'.split(' ')) {
@@ -63,15 +64,15 @@ test('world-aware look modes track orbited viewers, target self-relative points,
   const viewer=[6,1.2,Math.sqrt(12)],self=[0,0,0];
   const settle=(p,inputs,start=0,end=1200)=>{let pose;for(let t=start;t<=end;t+=20)pose=p.update(t,inputs);return pose;};
   const p=createPerformer();p.look('viewer');let pose=settle(p,{viewer,self});valid(pose);
-  assert.ok(Math.abs(pose.body.twist-Math.PI/3)<.015);assert.ok(Math.abs(pose.eyes.gaze[0])<.03);
-  p.look('away');pose=settle(p,{viewer,self},1220,2400);assert.ok(pose.body.twist>Math.PI/3+.7);assert.ok(pose.eyes.gaze[0]>.85);
+  assert.ok(Math.abs(pose.body.twist-(Math.PI/3-FACE_YAW))<.015,'body yaws so the FACE points at the viewer');assert.ok(Math.abs(pose.eyes.gaze[0])<.03);
+  p.look('away');pose=settle(p,{viewer,self},1220,2400);assert.ok(pose.body.twist>Math.PI/3-FACE_YAW+.7);assert.ok(pose.eyes.gaze[0]>.85);
   p.look('down');pose=settle(p,{viewer,self},2420,3600);assert.ok(pose.eyes.gaze[1]<-.85);
   p.look('up');pose=settle(p,{viewer,self},3620,4800);assert.ok(pose.eyes.gaze[1]>.85);
-  p.look('touch',{target:[2,0,2]});pose=settle(p,{viewer,self:[2,0,0]},4820,6000);assert.ok(Math.abs(pose.body.twist)<.02);assert.ok(pose.eyes.gaze[1]<-.4);
+  p.look('touch',{target:[2,0,2]});pose=settle(p,{viewer,self:[2,0,0]},4820,6000);assert.ok(Math.abs(pose.body.twist+FACE_YAW)<.02);assert.ok(pose.eyes.gaze[1]<-.4);
   p.look(null);pose=settle(p,{viewer,self},6020,7200);assert.ok(Math.abs(pose.eyes.gaze[1])<.5);
   const expiry=createPerformer();expiry.look('down',{durationMs:400});pose=settle(expiry,{},0,1400);assert.ok(pose.eyes.gaze[1]>-.5);
-  const listening=createPerformer();pose=settle(listening,{viewer,self,listening:true});assert.ok(Math.abs(pose.body.twist-Math.PI/3)<.015);
-  const speaking=createPerformer();pose=settle(speaking,{viewer,self,talking:true,speaking:.2});assert.ok(Math.abs(pose.body.twist-Math.PI/3)<.015);
+  const listening=createPerformer();pose=settle(listening,{viewer,self,listening:true});assert.ok(Math.abs(pose.body.twist-(Math.PI/3-FACE_YAW))<.015);
+  const speaking=createPerformer();pose=settle(speaking,{viewer,self,talking:true,speaking:.2});assert.ok(Math.abs(pose.body.twist-(Math.PI/3-FACE_YAW))<.015);
   for(const [mode,opts]of [['bad',{}],['touch',{}],['touch',{target:[NaN,0,0]}],['viewer',{durationMs:-1}]])assert.throws(()=>p.look(mode,opts),RangeError);
 });
 
@@ -81,7 +82,7 @@ test('all catalog performances reduced: no hop, no spin; buds retain gesture rea
     const {durationMs}=engine.play(emoji);
     for (let t=0;t<=durationMs+500;t+=1000/60) {
       const p=engine.update(t,{reducedMotion:true});valid(p);
-      assert.equal(p.body.offset[1],0,emoji);assert.equal(p.body.twist,0);assert.equal(p.flower.spin,0);
+      assert.equal(p.body.offset[1],0,emoji);assert.equal(p.body.twist,0);
     }
   }
   const a=createPerformer(),b=createPerformer();a.play('👋');b.play('👋');
@@ -162,7 +163,7 @@ test('idle subtle motion, natural single/double blinks, output not aliased',()=>
   e.play('👋');valid(e.update(60000));
 });
 test('needs-selected micros retain six gestures and no autonomous timer',()=>{
-  const kinds=['look','wiggle','sunflower','hum-sway','stretch','double-blink'];
+  const kinds=['look','wiggle','bud-wave','hum-sway','stretch','double-blink'];
   for(const kind of kinds) {
     const a=createPerformer({seed:1}),b=createPerformer({seed:1});
     a.update(0);b.update(0);a.micro(kind);
@@ -183,7 +184,6 @@ test('idle gestures never run during a performance, cancellation, or its 2s cool
       // The existing newest-wins 120ms blend may carry the incoming idle pose, never its timeline.
       if (t<5520) continue;
       assert.deepEqual(p.body,q.body,`body at ${t}`);assert.deepEqual({...p.eyes,gaze:[]},{...q.eyes,gaze:[]},`eyes at ${t}`); // Speech now aims at the viewer.
-      assert.deepEqual(p.flower,q.flower,`flower at ${t}`);
     }
   }
 });
@@ -191,7 +191,7 @@ test('needs controls drowsy pose; inactivity never sleeps independently',()=>{
   const e=createPerformer();e.update(0);
   const awake=e.update(75000);assert.deepEqual(awake.fx,[]);assert.equal(awake.mouth.shape,'none');
   const drowsy=e.update(80000,{needsDrowsy:true});assert.ok(drowsy.eyes.openL<=.571);assert.ok(drowsy.eyes.gaze[1]<0);
-  assert.ok(drowsy.flower.perk<0);assert.equal(drowsy.body.offset[1],0);assert.deepEqual(drowsy.fx,[]);
+  assert.equal(drowsy.body.offset[1],0);assert.deepEqual(drowsy.fx,[]);
 });
 test('every activity wakes with a 300ms startle; static pointer and sub-threshold audio do not',()=>{
   for (const kind of ['play','gaze','listening','speaking']) {
@@ -202,7 +202,7 @@ test('every activity wakes with a 300ms startle; static pointer and sub-threshol
     // A performance owns their pose above the wake layer; the other triggers reveal it directly.
     if (kind!=='play') {
       const wake=e.update(75150,inputs);assert.ok(wake.eyes.openL>=1.19);assert.ok(wake.body.offset[1]>0.024);
-      assert.ok(wake.flower.perk>0.4);assert.deepEqual(wake.fx,[]);
+      assert.ok(wake.body.puff>0.04);assert.deepEqual(wake.fx,[]);
       assert.equal(e.update(75300,inputs).body.offset[1],0);
     }
   }
@@ -222,8 +222,7 @@ test('reduced motion scales idle, listening, sleep and wake by 0.35, never hops'
     const p=a.update(t,inputs),q=b.update(t,{...inputs,reducedMotion:true});valid(q);
     for (const key of ['squash','puff','wobble']) assert.ok(Math.abs(q.body[key]-p.body[key]*0.35)<1e-10,key);
     p.body.lean.forEach((v,i)=>assert.ok(Math.abs(q.body.lean[i]-v*0.35)<1e-10));
-    assert.ok(Math.abs(q.flower.perk-p.flower.perk*0.35)<1e-10);
-    assert.equal(q.body.offset[1],0);assert.equal(q.body.twist,0);assert.equal(q.flower.spin,0);
+    assert.equal(q.body.offset[1],0);assert.equal(q.body.twist,0);
   }
 });
 test('listening has steady forward attention, slow blinks, pause-driven nods, occasional tiny tilts',()=>{
@@ -379,4 +378,24 @@ test('blink(): closes eyes now, then refractory 1.2 s; default schedule untouche
   w.update(0); assert.ok(w.predictStroke('✨', { nowMs: 16, thresholds: [.06,.06,.065,.08,.025,.025,.025,.12,.12] }) > 0); assert.equal(calls, 0);
   const a = createPerformer({ seed: 5 }), b = createPerformer({ seed: 5 });
   for (let at = 0; at <= 8000; at += 16) assert.deepEqual(a.update(at).eyes, b.update(at).eyes);
+});
+test('viewer awareness: eyes lead a damped body, pointer offset moves the gaze, saccades live, reduced motion stays calm',()=>{
+  const self=[0,0,0],cam=[-3.8,2.9,5.4],run=(attend,reducedMotion=false,seed=3)=>{
+    const p=createPerformer({seed});let pose,maxStep=0,prev=null;
+    for(let t=0;t<=6000;t+=1000/60){pose=p.update(t,{viewer:cam,attend:t<3000?cam:attend,self,reducedMotion});valid(pose);
+      if(t>3000&&prev)maxStep=Math.max(maxStep,Math.abs(pose.eyes.gaze[0]-prev));prev=pose.eyes.gaze[0];}
+    return {pose,maxStep};};
+  const centre=run(cam).pose,right=run([cam[0]+2.4*.84,cam[1],cam[2]+2.4*.55]).pose,left=run([cam[0]-2.4*.84,cam[1],cam[2]-2.4*.55]).pose;
+  assert.ok(Math.abs(centre.eyes.gaze[0])<.12,'camera centre looks at the viewer');
+  assert.ok(right.eyes.gaze[0]>centre.eyes.gaze[0]+.1&&left.eyes.gaze[0]<centre.eyes.gaze[0]-.1,'pointer offset moves the eyes the right way');
+  assert.ok(Math.abs(right.body.twist-centre.body.twist)<Math.abs(right.eyes.gaze[0]-centre.eyes.gaze[0])*.65+.2,'body follows less than the eyes');
+  assert.ok(run([cam[0]+2,cam[1]+1.5,cam[2]]).maxStep<.12,'a target jump glides: no one-frame gaze snap');
+  // Saccades: the gaze keeps moving while the target is still.
+  const p=createPerformer({seed:5});let lo=1,hi=-1;for(let t=0;t<30000;t+=1000/60){const g=p.update(t,{viewer:cam,attend:cam,self}).eyes.gaze;if(t>2000){lo=Math.min(lo,g[0]);hi=Math.max(hi,g[0]);}}
+  assert.ok(hi-lo>.03,'micro-movements');assert.ok(hi-lo<.6,'but never wanders off');
+  // Reduced motion: the body never turns, and eye motion is damped.
+  const calm=createPerformer({seed:5});let twist=0;for(let t=0;t<6000;t+=1000/60)twist=Math.max(twist,Math.abs(calm.update(t,{viewer:cam,attend:cam,self,reducedMotion:true}).body.twist));
+  assert.equal(twist,0);
+  // No attend input: the legacy wandering idle gaze is unchanged (no awareness state leaks in).
+  const a=createPerformer({seed:9}),b=createPerformer({seed:9});for(let t=0;t<4000;t+=50)assert.deepEqual(a.update(t,{viewer:cam,self}).eyes.gaze,b.update(t,{viewer:cam,self,attend:null}).eyes.gaze);
 });
