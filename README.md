@@ -6,7 +6,6 @@ Mintie is an open-source talking slime-blob companion. They live in a Three.js (
 
 The repo is a working showcase for System One and the companion to a blog post. It has no brand: any `/v1/systemone`-compatible decision model can be swapped in (the hosted Jev API, a self-hosted [OpenJev](https://huggingface.co/openjev/openjev), or another) by changing two environment variables.
 
-<!-- TODO: live after DNS attach -->
 Demo: https://mintie.sloprefinery.ai
 
 ## Quick start
