@@ -324,7 +324,7 @@ All of this is in [web/character](../web/character).
 | Frame interval, p95 | 16.67 ms + 0.5 ms (60 Hz) |
 | Cached audio | 1.5 MiB |
 
-These are targets the script checks. The repo does not publish measured results; run it on your own hardware.
+These are targets the script checks; run it on your own hardware. The only measured results in this repo are the latency figures [below](#measured-speech-end-to-first-audio-2026-11-16), and they come from one machine.
 
 ## Memory
 
